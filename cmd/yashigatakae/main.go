@@ -48,7 +48,7 @@ func main() {
 	root.AddCommand(newBifrostCmd())
 	root.AddCommand(newHooksCmd())
 	root.AddCommand(newKintsugiCmd())
-	root.AddCommand(notYet("graphify", "v0.4", graphify.Help))
+	root.AddCommand(newGraphifyCmd())
 	root.AddCommand(notYet("hermes", "v0.5", hermes.Help))
 	root.AddCommand(newHandoffCmd())
 	root.AddCommand(newResumeCmd())
@@ -346,6 +346,32 @@ func newMempalaceCmd() *cobra.Command {
 		cmd.AddCommand(sub)
 	}
 
+	return cmd
+}
+
+func newGraphifyCmd() *cobra.Command {
+	var refresh bool
+	var outDir string
+	cmd := &cobra.Command{
+		Use:   "graphify <repo>",
+		Short: "Generate a codebase wiki under ~/.yashigatakae/state/codebase-wiki/",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(c *cobra.Command, args []string) error {
+			res, err := graphify.Run(graphify.Options{
+				Repo:    args[0],
+				Refresh: refresh,
+				OutDir:  outDir,
+			})
+			if err != nil {
+				return err
+			}
+			fmt.Printf("✓ wiki at %s\n", res.WikiDir)
+			fmt.Printf("  files: %d   bytes: %d   HEAD: %s\n", res.Files, res.Bytes, res.GitCommit)
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&refresh, "refresh", false, "Force regenerate even if recent")
+	cmd.Flags().StringVar(&outDir, "out", "", "Override output dir")
 	return cmd
 }
 
