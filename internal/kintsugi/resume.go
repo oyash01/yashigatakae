@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/oyash01/yashigatakae/internal/osdetect"
 )
@@ -54,6 +55,15 @@ func Resume(ctx context.Context, opts ResumeOptions) (ResumeReport, error) {
 		if err != nil {
 			return ResumeReport{}, err
 		}
+	} else {
+		// Fuzzy resolve: user-typed name may be a prefix or substring of the
+		// real session id. Look up the relay's full list and pick the unique
+		// match — if more than one, surface the ambiguity for the caller.
+		resolved, ferr := resolveSession(ctx, client, sid)
+		if ferr != nil {
+			return ResumeReport{}, ferr
+		}
+		sid = resolved
 	}
 	cipher, err := client.GetLatest(ctx, sid)
 	if err != nil {
@@ -161,6 +171,43 @@ func Resume(ctx context.Context, opts ResumeOptions) (ResumeReport, error) {
 	}
 
 	return report, nil
+}
+
+// resolveSession turns a user-typed prefix/substring into a full session id by
+// listing the relay. Exact match wins; otherwise unique substring; otherwise
+// surfaces an "ambiguous: A | B | C" error so the caller can disambiguate.
+func resolveSession(ctx context.Context, client *Client, query string) (string, error) {
+	sids, err := client.ListSessions(ctx)
+	if err != nil {
+		return "", fmt.Errorf("list sessions: %w", err)
+	}
+	// Exact match short-circuit.
+	for _, s := range sids {
+		if s == query {
+			return s, nil
+		}
+	}
+	// Substring match.
+	var matches []string
+	q := strings.ToLower(query)
+	for _, s := range sids {
+		if strings.Contains(strings.ToLower(s), q) {
+			matches = append(matches, s)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return "", fmt.Errorf("no session matches %q (run `yashigatakae sessions ls` to see available)", query)
+	case 1:
+		return matches[0], nil
+	default:
+		preview := matches
+		if len(preview) > 5 {
+			preview = append(preview[:5], "…")
+		}
+		return "", fmt.Errorf("ambiguous %q matches %d sessions: %s",
+			query, len(matches), strings.Join(preview, " | "))
+	}
 }
 
 // pickLatestSession lists all sessions on the relay and picks the one whose

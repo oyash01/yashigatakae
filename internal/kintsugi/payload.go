@@ -228,6 +228,9 @@ func addFile(tw *tar.Writer, dstName, srcPath string) error {
 }
 
 func addDir(tw *tar.Writer, prefix, dir string) error {
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return nil // missing source dir is a no-op (e.g. archive backfill where memory/ wasn't created)
+	}
 	return filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
