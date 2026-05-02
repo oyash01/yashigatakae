@@ -848,7 +848,8 @@ func newKintsugiCmd() *cobra.Command {
 		Short: "Cross-device session+worktree continuity (handoff / resume / serve)",
 	}
 	{
-		var addr, dataDir, apiKey string
+		var addr, dataDir, apiKey, tlsDomain string
+		var tlsOn bool
 		sub := &cobra.Command{
 			Use:   "serve",
 			Short: "Run the kintsugi relay HTTP server (VPS-side)",
@@ -859,15 +860,19 @@ func newKintsugiCmd() *cobra.Command {
 					apiKey = os.Getenv("BIFROST_API_KEY")
 				}
 				return kintsugi.ServeRelay(ctx, kintsugi.RelayConfig{
-					Listen:  addr,
-					APIKey:  apiKey,
-					DataDir: dataDir,
+					Listen:     addr,
+					APIKey:     apiKey,
+					DataDir:    dataDir,
+					TLSEnabled: tlsOn || tlsDomain != "",
+					TLSDomain:  tlsDomain,
 				})
 			},
 		}
-		sub.Flags().StringVar(&addr, "addr", "127.0.0.1:8444", "HTTP listen address")
+		sub.Flags().StringVar(&addr, "addr", "127.0.0.1:8444", "HTTPS listen address")
 		sub.Flags().StringVar(&dataDir, "data", "", "Override data dir (default ~/.yashigatakae/kintsugi)")
 		sub.Flags().StringVar(&apiKey, "api-key", "", "Require Bearer auth (also reads BIFROST_API_KEY)")
+		sub.Flags().StringVar(&tlsDomain, "tls-domain", "", "Public DNS domain for Let's Encrypt cert (requires :80 reachable + DNS A record). Empty = self-signed if --tls.")
+		sub.Flags().BoolVar(&tlsOn, "tls", false, "Enable TLS with a self-signed cert (default off; use --tls-domain for real Let's Encrypt)")
 		cmd.AddCommand(sub)
 	}
 	return cmd
@@ -908,7 +913,8 @@ func newBifrostCmd() *cobra.Command {
 	}
 
 	{
-		var addr, mempalaceURL, apiKey string
+		var addr, mempalaceURL, apiKey, tlsDomain string
+		var tlsOn bool
 		sub := &cobra.Command{
 			Use:   "serve",
 			Short: "Run the bifrost gateway HTTP server",
@@ -924,12 +930,16 @@ func newBifrostCmd() *cobra.Command {
 					Downstreams: []bifrost.Downstream{
 						{Name: "mempalace", URL: mempalaceURL},
 					},
+					TLSEnabled: tlsOn || tlsDomain != "",
+					TLSDomain:  tlsDomain,
 				})
 			},
 		}
-		sub.Flags().StringVar(&addr, "addr", "127.0.0.1:8443", "HTTP listen address")
+		sub.Flags().StringVar(&addr, "addr", "127.0.0.1:8443", "HTTPS listen address")
 		sub.Flags().StringVar(&mempalaceURL, "mempalace", "http://127.0.0.1:8765/mcp", "mempalace MCP endpoint to proxy to")
 		sub.Flags().StringVar(&apiKey, "api-key", "", "Require Bearer token on incoming requests (also reads BIFROST_API_KEY env)")
+		sub.Flags().StringVar(&tlsDomain, "tls-domain", "", "Public DNS domain for Let's Encrypt cert (requires :80 reachable + DNS A record). Empty = self-signed if --tls.")
+		sub.Flags().BoolVar(&tlsOn, "tls", false, "Enable TLS with a self-signed cert (default off; use --tls-domain for real Let's Encrypt)")
 		cmd.AddCommand(sub)
 	}
 

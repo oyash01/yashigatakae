@@ -14,6 +14,7 @@ import (
 
 	"github.com/oyash01/yashigatakae/internal/audit"
 	"github.com/oyash01/yashigatakae/internal/osdetect"
+	tlsint "github.com/oyash01/yashigatakae/internal/tls"
 )
 
 func auditPathOrFallback() string {
@@ -28,6 +29,10 @@ type RelayConfig struct {
 	Listen string // ":8444"
 	APIKey string // require Bearer (empty = unauthenticated, only safe behind a firewall)
 	DataDir string // override storage root; default = ~/.yashigatakae/kintsugi
+
+	// TLS (v0.10+). Same semantics as bifrost.Config.
+	TLSEnabled bool
+	TLSDomain  string
 }
 
 // ServeRelay runs the kintsugi relay HTTP server. Blocks until ctx is cancelled.
@@ -94,11 +99,44 @@ func ServeRelay(ctx context.Context, cfg RelayConfig) error {
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
+
+	var tlsCfg *tlsint.Configured
+	if cfg.TLSEnabled || cfg.TLSDomain != "" {
+		c, err := tlsint.Configure(ctx, tlsint.Options{
+			Domain:        cfg.TLSDomain,
+			SelfSignedFor: "kintsugi",
+		})
+		if err != nil {
+			return fmt.Errorf("tls configure: %w", err)
+		}
+		tlsCfg = c
+		httpServer.TLSConfig = c.Config
+		if c.ChallengeHandler != nil {
+			go func() {
+				challenge := &http.Server{Addr: ":80", Handler: c.ChallengeHandler, ReadHeaderTimeout: 5 * time.Second}
+				_ = challenge.ListenAndServe()
+			}()
+		}
+	}
+
 	errCh := make(chan error, 1)
-	go func() { errCh <- httpServer.ListenAndServe() }()
-	fmt.Printf("kintsugi relay listening on http://%s/kintsugi/* (data: %s)\n", cfg.Listen, cfg.DataDir)
+	go func() {
+		if tlsCfg != nil {
+			errCh <- httpServer.ListenAndServeTLS("", "")
+		} else {
+			errCh <- httpServer.ListenAndServe()
+		}
+	}()
+	scheme := "http"
+	if tlsCfg != nil {
+		scheme = "https"
+	}
+	fmt.Printf("kintsugi relay listening on %s://%s/kintsugi/* (data: %s)\n", scheme, cfg.Listen, cfg.DataDir)
 	fmt.Printf("  audit log: %s\n  POST: %s\n  GET:  %s\n",
 		auditPathOrFallback(), postLim.String(), getLim.String())
+	if tlsCfg != nil {
+		fmt.Printf("  %s\n", tlsCfg.String())
+	}
 
 	select {
 	case <-ctx.Done():

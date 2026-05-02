@@ -14,6 +14,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/oyash01/yashigatakae/internal/audit"
+	tlsint "github.com/oyash01/yashigatakae/internal/tls"
 )
 
 // auditPathOrFallback returns the audit log path for the startup message.
@@ -35,6 +36,13 @@ type Config struct {
 	Listen      string       // ":8443"
 	Downstreams []Downstream // ordered by priority for tool name conflicts
 	APIKey      string       // when set, requests must carry "Authorization: Bearer <key>"
+
+	// TLS (v0.10+). When TLSDomain is set, autocert manages a real Let's
+	// Encrypt cert; the caller must also start the HTTP-01 challenge
+	// listener on :80. When TLSEnabled is true with no domain, a self-signed
+	// cert is generated. When TLSEnabled is false (default), plain HTTP.
+	TLSEnabled bool
+	TLSDomain  string
 }
 
 // Help is what `yashigatakae bifrost` prints when invoked without subcommand.
@@ -119,10 +127,45 @@ func Serve(ctx context.Context, cfg Config) error {
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
+
+	// TLS (optional)
+	var tlsCfg *tlsint.Configured
+	if cfg.TLSEnabled || cfg.TLSDomain != "" {
+		c, err := tlsint.Configure(ctx, tlsint.Options{
+			Domain:        cfg.TLSDomain,
+			SelfSignedFor: "bifrost",
+		})
+		if err != nil {
+			return fmt.Errorf("tls configure: %w", err)
+		}
+		tlsCfg = c
+		httpServer.TLSConfig = c.Config
+		// Start HTTP-01 challenge listener on :80 for Let's Encrypt.
+		if c.ChallengeHandler != nil {
+			go func() {
+				challenge := &http.Server{Addr: ":80", Handler: c.ChallengeHandler, ReadHeaderTimeout: 5 * time.Second}
+				_ = challenge.ListenAndServe()
+			}()
+		}
+	}
+
 	errCh := make(chan error, 1)
-	go func() { errCh <- httpServer.ListenAndServe() }()
-	fmt.Printf("bifrost listening on http://%s/mcp (health: /health)\n", cfg.Listen)
+	go func() {
+		if tlsCfg != nil {
+			errCh <- httpServer.ListenAndServeTLS("", "")
+		} else {
+			errCh <- httpServer.ListenAndServe()
+		}
+	}()
+	scheme := "http"
+	if tlsCfg != nil {
+		scheme = "https"
+	}
+	fmt.Printf("bifrost listening on %s://%s/mcp (health: /health)\n", scheme, cfg.Listen)
 	fmt.Printf("  audit log: %s\n  %s\n", auditPathOrFallback(), limiter.String())
+	if tlsCfg != nil {
+		fmt.Printf("  %s\n", tlsCfg.String())
+	}
 
 	select {
 	case <-ctx.Done():
