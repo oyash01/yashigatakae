@@ -163,14 +163,222 @@ func newDoctorCmd() *cobra.Command {
 
 func newCavemanCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "caveman <lite|full|ultra|off>",
-		Short: "Switch caveman compression level",
-		Args:  cobra.ExactArgs(1),
+		Use:   "caveman <lite|full|ultra|off> | <subcommand>",
+		Short: "Caveman: compression level + auto-compaction + tool truncation + prompt cache",
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 0 {
+				return cmd.Help()
+			}
 			return caveman.SetLevel(args[0])
 		},
 	}
+
+	// caveman compact [--dry-run]
+	{
+		var dryRun bool
+		var sessionID string
+		var transcriptPath string
+		sub := &cobra.Command{
+			Use:   "compact",
+			Short: "Show the compaction prompt that would inject at the configured threshold",
+			RunE: func(c *cobra.Command, args []string) error {
+				cfg, err := caveman.Load()
+				if err != nil {
+					return err
+				}
+				transcript := ""
+				if transcriptPath != "" {
+					b, err := os.ReadFile(transcriptPath)
+					if err != nil {
+						return err
+					}
+					transcript = string(b)
+				}
+				rep, err := caveman.CheckPressure(transcript, sessionID)
+				if err != nil {
+					return err
+				}
+				if dryRun {
+					fmt.Printf("estimated_tokens=%d threshold=%d should_compact=%v\n",
+						rep.EstimatedTokens, rep.Threshold, rep.ShouldCompact)
+					if rep.ShouldCompact {
+						fmt.Println("---")
+						fmt.Print(rep.Prompt)
+					}
+					return nil
+				}
+				_ = cfg
+				if rep.ShouldCompact {
+					fmt.Print(rep.Prompt)
+				}
+				return nil
+			},
+		}
+		sub.Flags().BoolVar(&dryRun, "dry-run", false, "print pressure stats and the prompt without exiting non-zero")
+		sub.Flags().StringVar(&sessionID, "session", "", "session id to embed in the compaction header")
+		sub.Flags().StringVar(&transcriptPath, "transcript", "", "path to a file whose size approximates current context (defaults to empty = no pressure)")
+		cmd.AddCommand(sub)
+	}
+
+	// caveman truncate --tool Bash (reads stdin)
+	{
+		var tool string
+		var asJSON bool
+		sub := &cobra.Command{
+			Use:   "truncate",
+			Short: "Truncate stdin to the per-tool cap; full output spilled to /tmp/caveman/<sha8>.txt",
+			RunE: func(c *cobra.Command, args []string) error {
+				if tool == "" {
+					return fmt.Errorf("--tool required (Bash, Read, Write, Edit, WebFetch, …)")
+				}
+				buf, err := readAllStdin()
+				if err != nil {
+					return err
+				}
+				res, err := caveman.TruncateForTool(tool, string(buf))
+				if err != nil {
+					return err
+				}
+				if asJSON {
+					b, _ := json.MarshalIndent(res, "", "  ")
+					fmt.Println(string(b))
+					return nil
+				}
+				fmt.Print(res.Output)
+				return nil
+			},
+		}
+		sub.Flags().StringVar(&tool, "tool", "", "tool name (Bash, Read, Write, Edit, WebFetch)")
+		sub.Flags().BoolVar(&asJSON, "json", false, "emit the full TruncateResult as JSON instead of just the truncated body")
+		cmd.AddCommand(sub)
+	}
+
+	// caveman cache ephemeral
+	{
+		sub := &cobra.Command{
+			Use:   "cache",
+			Short: "Emit the cache_control marker the SessionStart hook embeds in the system prompt",
+		}
+		sub.AddCommand(&cobra.Command{
+			Use:   "ephemeral",
+			Short: "Print the JSON marker for an ephemeral cache_control entry (or null when disabled)",
+			RunE: func(c *cobra.Command, args []string) error {
+				b, err := caveman.PromptCacheMarker()
+				if err != nil {
+					return err
+				}
+				fmt.Println(string(b))
+				return nil
+			},
+		})
+		cmd.AddCommand(sub)
+	}
+
+	// caveman config get|set <key>=<value>
+	{
+		sub := &cobra.Command{
+			Use:   "config",
+			Short: "Inspect and edit ~/.yashigatakae/caveman.json",
+		}
+		sub.AddCommand(&cobra.Command{
+			Use:   "get",
+			Short: "Print the merged caveman config",
+			RunE: func(c *cobra.Command, args []string) error {
+				cfg, err := caveman.Load()
+				if err != nil {
+					return err
+				}
+				b, _ := json.MarshalIndent(cfg, "", "  ")
+				fmt.Println(string(b))
+				return nil
+			},
+		})
+		sub.AddCommand(&cobra.Command{
+			Use:   "set <key> <value>",
+			Short: "Update one config field (level, verbosity, compact_threshold_tokens, compact_target_tokens, default_tool_cap, prompt_cache_ephemeral, tool_caps.<Tool>=<n>)",
+			Args:  cobra.ExactArgs(2),
+			RunE: func(c *cobra.Command, args []string) error {
+				cfg, err := caveman.Load()
+				if err != nil {
+					return err
+				}
+				if err := applyConfigSet(&cfg, args[0], args[1]); err != nil {
+					return err
+				}
+				if err := caveman.Save(cfg); err != nil {
+					return err
+				}
+				fmt.Printf("✓ %s=%s\n", args[0], args[1])
+				return nil
+			},
+		})
+		cmd.AddCommand(sub)
+	}
+
 	return cmd
+}
+
+func applyConfigSet(cfg *caveman.Config, key, value string) error {
+	switch key {
+	case "level":
+		cfg.Level = value
+	case "verbosity":
+		cfg.Verbosity = value
+	case "compact_threshold_tokens":
+		n, err := strconv.Atoi(value)
+		if err != nil {
+			return err
+		}
+		cfg.CompactThresholdTokens = n
+	case "compact_target_tokens":
+		n, err := strconv.Atoi(value)
+		if err != nil {
+			return err
+		}
+		cfg.CompactTargetTokens = n
+	case "default_tool_cap":
+		n, err := strconv.Atoi(value)
+		if err != nil {
+			return err
+		}
+		cfg.DefaultToolCap = n
+	case "prompt_cache_ephemeral":
+		cfg.PromptCacheEphemeral = value == "true" || value == "1" || value == "yes"
+	default:
+		// tool_caps.Bash=4000 form
+		const prefix = "tool_caps."
+		if len(key) > len(prefix) && key[:len(prefix)] == prefix {
+			tool := key[len(prefix):]
+			n, err := strconv.Atoi(value)
+			if err != nil {
+				return err
+			}
+			if cfg.ToolCaps == nil {
+				cfg.ToolCaps = map[string]int{}
+			}
+			cfg.ToolCaps[tool] = n
+			return nil
+		}
+		return fmt.Errorf("unknown key %q", key)
+	}
+	return nil
+}
+
+func readAllStdin() ([]byte, error) {
+	const max = 64 << 20 // 64 MiB hard cap; we're truncating, not archiving
+	var out []byte
+	buf := make([]byte, 64<<10)
+	for len(out) < max {
+		n, err := os.Stdin.Read(buf)
+		if n > 0 {
+			out = append(out, buf[:n]...)
+		}
+		if err != nil {
+			break
+		}
+	}
+	return out, nil
 }
 
 func newStateCmd() *cobra.Command {

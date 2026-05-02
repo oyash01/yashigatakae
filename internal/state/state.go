@@ -366,6 +366,7 @@ func defaultHookSpecs(claudeDir string, _ osdetect.OS) []HookSpec {
 	return []spec{
 		{Event: "SessionStart", Type: "command", Cmd: "node " + quote(prefix("caveman-activate.js"))},
 		{Event: "UserPromptSubmit", Type: "command", Cmd: "node " + quote(prefix("caveman-mode-tracker.js"))},
+		{Event: "PreToolUse", Matcher: "Bash|Read|WebFetch", Type: "command", Cmd: "node " + quote(prefix("caveman-truncate.js"))},
 		{Event: "PostToolUse", Matcher: "Edit|Write", Type: "command", Cmd: quote(yashi) + " hooks autocommit"},
 		{Event: "SessionEnd", Type: "command", Cmd: quote(yashi) + " hooks sweep"},
 	}

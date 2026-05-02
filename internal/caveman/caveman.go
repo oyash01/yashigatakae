@@ -78,6 +78,7 @@ func HooksInstalled() (bool, error) {
 		"caveman-mode-tracker.js",
 		"caveman-config.js",
 		"caveman-statusline.sh",
+		"caveman-truncate.js",
 	}
 	for _, name := range required {
 		if _, err := os.Stat(filepath.Join(claudeDir, "hooks", name)); err != nil {
