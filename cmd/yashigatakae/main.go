@@ -641,7 +641,8 @@ func newMempalaceCmd() *cobra.Command {
 
 	// remember
 	{
-		var project, tags, source string
+		var project, tags, source, sourceMachine string
+		var noDedupe, noCategorize bool
 		sub := &cobra.Command{
 			Use:   "remember <text>",
 			Short: "Store a memory entry (semantically embedded if API key is set)",
@@ -649,10 +650,13 @@ func newMempalaceCmd() *cobra.Command {
 			RunE: func(c *cobra.Command, args []string) error {
 				body := joinArgs(args)
 				id, err := mempalace.Remember(context.Background(), mempalace.RememberOptions{
-					Body:    body,
-					Source:  source,
-					Project: project,
-					Tags:    tags,
+					Body:          body,
+					Source:        source,
+					SourceMachine: sourceMachine,
+					Project:       project,
+					Tags:          tags,
+					NoDedupe:      noDedupe,
+					NoCategorize:  noCategorize,
 				})
 				if err != nil {
 					return err
@@ -664,24 +668,31 @@ func newMempalaceCmd() *cobra.Command {
 		sub.Flags().StringVar(&project, "project", "", "Project tag (e.g. ghostnode)")
 		sub.Flags().StringVar(&tags, "tags", "", "Comma-separated tags")
 		sub.Flags().StringVar(&source, "source", "cli", "Source label (cli, hook, hermes, etc.)")
+		sub.Flags().StringVar(&sourceMachine, "source-machine", "", "Hostname of the machine the entry came from")
+		sub.Flags().BoolVar(&noDedupe, "no-dedupe", false, "Disable the cosine/string near-duplicate check")
+		sub.Flags().BoolVar(&noCategorize, "no-categorize", false, "Skip auto-category assignment")
 		cmd.AddCommand(sub)
 	}
 
 	// recall
 	{
 		var top int
-		var project string
+		var project, category, mode string
+		var halfLifeDays float64
 		var asJSON bool
 		sub := &cobra.Command{
 			Use:   "recall <query>",
-			Short: "Search memory by semantic similarity (or keyword fallback)",
+			Short: "Search memory by hybrid (cosine + BM25, RRF-fused) ranking with time-decay",
 			Args:  cobra.MinimumNArgs(1),
 			RunE: func(c *cobra.Command, args []string) error {
 				query := joinArgs(args)
 				hits, err := mempalace.Recall(context.Background(), mempalace.RecallOptions{
-					Query:   query,
-					TopK:    top,
-					Project: project,
+					Query:        query,
+					TopK:         top,
+					Project:      project,
+					Category:     category,
+					HalfLifeDays: halfLifeDays,
+					Mode:         mode,
 				})
 				if err != nil {
 					return err
@@ -700,14 +711,62 @@ func newMempalaceCmd() *cobra.Command {
 					if len(body) > 200 {
 						body = body[:200] + "…"
 					}
-					fmt.Printf("  #%-5d  %.3f  [%s/%s]  %s\n", h.ID, h.Score, h.Source, h.Project, body)
+					cat := h.Category
+					if cat == "" {
+						cat = "-"
+					}
+					fmt.Printf("  #%-5d  %.4f  [%s/%s/%s]  %s\n", h.ID, h.Score, h.Source, h.Project, cat, body)
 				}
 				return nil
 			},
 		}
 		sub.Flags().IntVar(&top, "top", 10, "Max number of hits to return")
 		sub.Flags().StringVar(&project, "project", "", "Limit search to one project")
+		sub.Flags().StringVar(&category, "category", "", "Filter by category (user_pref|observation|fact|decision|error|code_snippet|url|lesson|misc)")
+		sub.Flags().StringVar(&mode, "mode", "hybrid", "Ranker mode: hybrid|semantic|keyword")
+		sub.Flags().Float64Var(&halfLifeDays, "half-life", 30, "Time-decay half-life in days (0 disables decay)")
 		sub.Flags().BoolVar(&asJSON, "json", false, "Output as JSON")
+		cmd.AddCommand(sub)
+	}
+
+	// consolidate
+	{
+		var project, window string
+		var batchSize int
+		var dryRun, archive bool
+		sub := &cobra.Command{
+			Use:   "consolidate",
+			Short: "Roll up the oldest --batch entries in --window into a single summary entry; --archive removes originals",
+			RunE: func(c *cobra.Command, args []string) error {
+				w, err := time.ParseDuration(window)
+				if err != nil {
+					return fmt.Errorf("invalid --window: %w", err)
+				}
+				res, err := mempalace.Consolidate(context.Background(), mempalace.ConsolidateOptions{
+					Project:   project,
+					Window:    w,
+					BatchSize: batchSize,
+					DryRun:    dryRun,
+					Archive:   archive,
+				})
+				if err != nil {
+					return err
+				}
+				fmt.Printf("inspected=%d  summaries=%d  archived=%d\n", res.Inspected, res.Summaries, res.Archived)
+				if res.ArchivePath != "" {
+					fmt.Printf("archive: %s\n", res.ArchivePath)
+				}
+				if len(res.NewEntryIDs) > 0 {
+					fmt.Printf("new summary ids: %v\n", res.NewEntryIDs)
+				}
+				return nil
+			},
+		}
+		sub.Flags().StringVar(&project, "project", "", "Limit to one project")
+		sub.Flags().StringVar(&window, "window", "720h", "Only consider entries OLDER than now-window (e.g. 720h = 30d)")
+		sub.Flags().IntVar(&batchSize, "batch", 50, "Entries per summary")
+		sub.Flags().BoolVar(&dryRun, "dry-run", false, "Print the summary without inserting / archiving")
+		sub.Flags().BoolVar(&archive, "archive", false, "Move originals to ~/.yashigatakae/mempalace-archive/<ts>.jsonl and delete from active set")
 		cmd.AddCommand(sub)
 	}
 

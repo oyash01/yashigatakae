@@ -27,10 +27,13 @@ Without a key set, recall falls back to keyword matching.`
 
 // RememberOptions captures all CLI flags for `mempalace remember`.
 type RememberOptions struct {
-	Body    string
-	Source  string
-	Project string
-	Tags    string // comma-separated
+	Body          string
+	Source        string
+	SourceMachine string
+	Project       string
+	Tags          string // comma-separated
+	NoDedupe      bool   // skip the cosine/string dedupe pass
+	NoCategorize  bool   // skip auto-category assignment
 }
 
 // Remember inserts a new entry. If an embedder is configured, it computes
@@ -61,12 +64,31 @@ func Remember(ctx context.Context, opts RememberOptions) (int64, error) {
 		}
 	}
 
+	tags := stringTags(opts.Tags)
+
+	// Dedupe pass — fold near-duplicates into the existing row.
+	if !opts.NoDedupe {
+		dup, err := FindDuplicate(ctx, store, opts.Project, opts.Body, vec, 200, 0.95)
+		if err == nil && dup.Found {
+			if uerr := store.UpdateMergedRefresh(ctx, dup.ExistingID, tags); uerr == nil {
+				return dup.ExistingID, nil
+			}
+		}
+	}
+
+	cat := ""
+	if !opts.NoCategorize {
+		cat = string(Categorize(opts.Body, tags))
+	}
+
 	id, err := store.Insert(ctx, Entry{
-		Source:    source,
-		Project:   opts.Project,
-		Tags:      stringTags(opts.Tags),
-		Body:      opts.Body,
-		Embedding: vec,
+		Source:        source,
+		SourceMachine: opts.SourceMachine,
+		Project:       opts.Project,
+		Tags:          tags,
+		Body:          opts.Body,
+		Embedding:     vec,
+		Category:      cat,
 	}, emb.Model())
 	if err != nil {
 		return 0, err
@@ -76,19 +98,37 @@ func Remember(ctx context.Context, opts RememberOptions) (int64, error) {
 
 // RecallOptions captures all CLI flags for `mempalace recall`.
 type RecallOptions struct {
-	Query   string
-	TopK    int
-	Project string
+	Query        string
+	TopK         int
+	Project      string
+	Category     string
+	HalfLifeDays float64 // <=0 disables time decay; default 30
+	Mode         string  // "semantic" | "keyword" | "hybrid" (default hybrid)
 }
 
-// Recall returns up to TopK hits ranked by cosine similarity (if the query
-// can be embedded) or by case-insensitive substring match (fallback).
+// Recall returns up to TopK hits. Mode = "hybrid" (default) fuses cosine and
+// BM25 via reciprocal rank fusion; "semantic" is cosine-only; "keyword" is
+// BM25-only. Time-decay (HalfLifeDays > 0) re-weights by age.
 func Recall(ctx context.Context, opts RecallOptions) ([]Hit, error) {
 	if opts.TopK <= 0 {
 		opts.TopK = 10
 	}
 	if strings.TrimSpace(opts.Query) == "" {
 		return nil, fmt.Errorf("query is empty")
+	}
+	if opts.Mode == "" {
+		opts.Mode = "hybrid"
+	}
+	if opts.HalfLifeDays == 0 {
+		opts.HalfLifeDays = 30
+	}
+	if opts.Mode == "hybrid" {
+		return RecallHybrid(ctx, HybridOptions{
+			TopK:         opts.TopK,
+			Project:      opts.Project,
+			Category:     opts.Category,
+			HalfLifeDays: opts.HalfLifeDays,
+		}, opts.Query)
 	}
 	store, err := Open()
 	if err != nil {
