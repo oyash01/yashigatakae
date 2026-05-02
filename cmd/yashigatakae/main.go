@@ -234,6 +234,25 @@ func newSecretsCmd() *cobra.Command {
 		Use:   "secrets",
 		Short: "Manage encrypted secrets.env synced via SSH from VPS",
 	}
+	{
+		var keys []string
+		var restart, dryRun bool
+		sub := &cobra.Command{
+			Use:   "rotate",
+			Short: "Generate new random values for BIFROST_API_KEY + KINTSUGI_KEY (or specific --key) and write secrets.env",
+			RunE: func(c *cobra.Command, args []string) error {
+				return secrets.Rotate(secrets.RotateOptions{
+					OnlyKeys:        keys,
+					RestartServices: restart,
+					DryRun:          dryRun,
+				})
+			},
+		}
+		sub.Flags().StringSliceVar(&keys, "key", nil, "Specific key(s) to rotate (default: BIFROST_API_KEY + KINTSUGI_KEY)")
+		sub.Flags().BoolVar(&restart, "restart", false, "After write, systemctl restart all yashigatakae services (root only)")
+		sub.Flags().BoolVar(&dryRun, "dry-run", false, "Print what would change; don't modify secrets.env")
+		cmd.AddCommand(sub)
+	}
 	cmd.AddCommand(&cobra.Command{
 		Use:   "pull",
 		Short: "Pull ~/.yashigatakae/secrets.env from VPS",

@@ -73,25 +73,55 @@ func RunVPS() error {
 		}
 	}
 
-	// 4. Final report
+	// 4. Open firewall ports if ufw is active. Best-effort; not fatal.
+	if out, _ := exec.Command("ufw", "status").Output(); strings.Contains(string(out), "Status: active") {
+		for _, port := range []string{"22/tcp", "80/tcp", "443/tcp", "8443/tcp", "8444/tcp"} {
+			_ = exec.Command("ufw", "allow", port).Run()
+		}
+		fmt.Println("  · ufw rules added for 22, 80, 443, 8443, 8444")
+	}
+
+	// 5. Get the kintsugi key for the client snippet too.
+	kintKey, _ := readSecret("KINTSUGI_KEY")
+
+	// 6. Final report.
 	publicIP := detectPublicIP()
 	fmt.Println()
 	fmt.Println("══════════════════════════════════════════════════════════════")
-	fmt.Println(" VPS install complete.  Mac/Win clients connect via:")
+	fmt.Println(" VPS install complete.  Each client machine runs:")
 	fmt.Println("══════════════════════════════════════════════════════════════")
-	fmt.Printf("   URL:  http://%s:8443/mcp\n", publicIP)
-	fmt.Printf("   Auth: Authorization: Bearer %s\n", apiKey)
 	fmt.Println()
-	fmt.Println("   On every client:")
-	fmt.Println("     1. Set BIFROST_URL and BIFROST_API_KEY in ~/.yashigatakae/secrets.env")
-	fmt.Println("     2. Re-run `yashigatakae init` (or `yashigatakae state render`)")
-	fmt.Println("     3. ~/.claude/settings.json's bifrost MCP entry will point at the VPS")
+	fmt.Println("   # one-time setup on every client (Mac/Win/Linux)")
+	fmt.Println("   curl -fsSL https://raw.githubusercontent.com/oyash01/yashigatakae/main/installers/install.sh | sh")
 	fmt.Println()
-	fmt.Println("   Recommended next: front this with Caddy or nginx for HTTPS.")
-	fmt.Println("   (Built-in TLS support arrives in v0.7.)")
+	fmt.Println("   # then add to ~/.yashigatakae/secrets.env")
+	fmt.Printf("   BIFROST_URL=https://%s:8443/mcp\n", publicIP)
+	fmt.Printf("   BIFROST_API_KEY=%s\n", apiKey)
+	fmt.Printf("   KINTSUGI_KEY=%s\n", kintKey)
+	fmt.Println()
+	fmt.Println("   # then init")
+	fmt.Println("   yashigatakae init")
+	fmt.Println()
+	fmt.Println("══════════════════════════════════════════════════════════════")
+	fmt.Println("   Always-on:    `sudo yashigatakae enable`")
+	fmt.Println("   TLS:          re-run a service with --tls-domain DOMAIN")
+	fmt.Println("                 (requires DNS A record + :80 reachable)")
+	fmt.Println("   fail2ban:     installers/yashigatakae.fail2ban.conf")
+	fmt.Println("   Audit log:    /var/log/yashigatakae/audit.log")
+	fmt.Println("   Rotate keys:  `yashigatakae secrets rotate --restart`")
 	fmt.Println("══════════════════════════════════════════════════════════════")
 
 	return nil
+}
+
+// readSecret retrieves a key from secrets.env (best-effort, returns "").
+func readSecret(key string) (string, error) {
+	home, _ := os.UserHomeDir()
+	body, err := os.ReadFile(filepath.Join(home, ".yashigatakae", "secrets.env"))
+	if err != nil {
+		return "", err
+	}
+	return readEnvVar(string(body), key), nil
 }
 
 // ensureSecret reads ~/.yashigatakae/secrets.env, returns the value of `key`
