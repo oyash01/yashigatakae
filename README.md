@@ -104,6 +104,8 @@ Append to `~/.yashigatakae/secrets.env`:
 BIFROST_URL=http://<vps-ip>:8443/mcp
 BIFROST_API_KEY=<key from step 1>
 KINTSUGI_KEY=<key from step 1>
+# OPTIONAL: your personal state repo (skills + custom hooks + graphify wikis)
+# STATE_REPO_URL=git@github.com:<you>/yashigatakae-state.git
 ```
 
 Then run:
@@ -112,7 +114,23 @@ Then run:
 yashigatakae init
 ```
 
-`~/.claude/settings.json` is updated to register a single MCP server (bifrost) with the right `Authorization` header. Inside Claude Code, you'll see `mempalace_recall`, `mempalace_remember`, `mempalace_forget`, `mempalace_stats` available as MCP tools.
+The init flow:
+- Renders embedded templates (CLAUDE.md, settings.json, secrets.example.env) into `~/.claude/` and `~/.yashigatakae/`. **No private skills are pulled from the public yashigatakae repo** — the templates ship inside the binary.
+- Installs the embedded caveman hooks into `~/.claude/hooks/`.
+- If `STATE_REPO_URL` is set, clones your personal state repo and overlays its `skills/` + `hooks/` on top.
+- Registers `bifrost` as the single MCP server in `~/.claude/settings.json` with the right `Authorization` header.
+
+Inside Claude Code, you'll see `mempalace_recall`, `mempalace_remember`, `mempalace_forget`, `mempalace_stats` available as MCP tools.
+
+### Optional: create your personal state repo
+
+```bash
+yashigatakae state init                    # creates <you>/yashigatakae-state private,
+                                           # clones to ~/.yashigatakae/state,
+                                           # writes STATE_REPO_URL into secrets.env
+```
+
+Requires the [`gh` CLI](https://cli.github.com) authenticated as the account you want the repo created under. The new repo is forked from the public template at `oyash01/yashigatakae-state-template`. Skill names, hook overrides, and graphify wikis live there — never in the public yashigatakae tool repo.
 
 ### 3. The travel scenario
 
@@ -191,6 +209,33 @@ github.com/oyash01/
 
 ---
 
+## Always-on (Linux/systemd)
+
+Once `init --vps` lands the four systemd units (`mempalace`, `bifrost`, `kintsugi`, `hermes`), make them perpetual with one command:
+
+```bash
+sudo yashigatakae enable     # systemctl enable --now all four units
+```
+
+Each unit ships with `Restart=always`, `RestartSec=3`, `StartLimitIntervalSec=0`, `TimeoutStopSec=10`, `KillSignal=SIGTERM`. The `StartLimitIntervalSec=0` line specifically disables systemd's default "5 starts in 10 s → mark failed" rate limit, so even a pathological tight crash-loop keeps retrying instead of going dormant. Reboots, OS upgrades, network drops, OOM kills, manual `systemctl stop` — none of it sticks. The services come back. They stop only when you explicitly run:
+
+```bash
+sudo yashigatakae disable    # systemctl disable --now all four units
+```
+
+(Mac/Win clients don't have always-on daemons in v0.9; the kintsugi watcher is slated for a future release.)
+
+## Repo architecture (v0.9+)
+
+```
+oyash01/yashigatakae               PUBLIC   the Go binary + this README + installer
+oyash01/yashigatakae-state-template PUBLIC  the empty scaffold for `state init`
+<you>/yashigatakae-state           PRIVATE  YOUR skills, hook overrides, codebase wikis
+                                            — created by `yashigatakae state init`
+```
+
+The public yashigatakae repo no longer ships any private skills. Every required template + caveman hook script is **embedded in the binary itself** at compile time (see `internal/state/embedded/`). A fresh `init` works without ever talking to GitHub for state. Your personal state repo overlays on top when configured, but is strictly optional.
+
 ## Roadmap
 
 - **v0.1** ✓ Skeleton + `init` (Mac/Linux/Windows). gstack wrap, caveman hooks, state-repo render, doctor.
@@ -199,7 +244,9 @@ github.com/oyash01/
 - **v0.4** ✓ graphify minimal: per-repo `overview.md`, `recent.md`, `index.md`, `files.json`.
 - **v0.5** ✓ hermes background self-learning agent (queue + worker + lesson distillation).
 - **v0.6** ✓ self-update + drift-aware status.
-- **v0.7** ← *we are here* — README polish + completion tag.
+- **v0.7** ✓ README polish + initial completion tag.
+- **v0.8** ✓ past-session backfill + half-way workspace + Bubble Tea TUI.
+- **v0.9** ← *we are here* — state-repo decoupled (embedded templates + per-user STATE_REPO_URL); always-on systemd hardening (`yashigatakae enable`).
 
 Future polish:
 - v0.4.1 LSP/tree-sitter for richer graphify output (call/import graph)
