@@ -40,6 +40,9 @@ type InitOptions struct {
 
 // Run executes the v0.1 init flow.
 func Run(opts InitOptions) error {
+	if opts.VPS {
+		return RunVPS()
+	}
 	fmt.Println("yashigatakae init — bootstrapping this machine")
 	fmt.Println()
 

@@ -13,9 +13,10 @@ import (
 )
 
 const (
-	BifrostName     = "bifrost"
-	PlaceholderURL  = "http://localhost:8443" // v0.1 placeholder
-	BifrostKeyEnv   = "BIFROST_API_KEY"
+	BifrostName    = "bifrost"
+	defaultURL     = "http://127.0.0.1:8443/mcp"
+	BifrostURLEnv  = "BIFROST_URL" // override the bifrost endpoint (e.g. https://yashi.vps.example/mcp)
+	BifrostKeyEnv  = "BIFROST_API_KEY"
 )
 
 // settingsShape captures the keys we touch. Other keys are preserved verbatim.
@@ -49,11 +50,20 @@ func RegisterPlaceholder() error {
 	if mcp == nil {
 		mcp = map[string]any{}
 	}
-	mcp[BifrostName] = map[string]any{
-		"type":    "http",
-		"url":     PlaceholderURL,
-		"comment": "yashigatakae bifrost gateway — v0.1 placeholder; v0.2 will swap to VPS HTTPS endpoint",
+	url := os.Getenv(BifrostURLEnv)
+	if url == "" {
+		url = defaultURL
 	}
+	entry := map[string]any{
+		"type": "http",
+		"url":  url,
+	}
+	if key := os.Getenv(BifrostKeyEnv); key != "" {
+		entry["headers"] = map[string]any{
+			"Authorization": "Bearer " + key,
+		}
+	}
+	mcp[BifrostName] = entry
 	settings["mcpServers"] = mcp
 
 	out, err := json.MarshalIndent(settings, "", "  ")
