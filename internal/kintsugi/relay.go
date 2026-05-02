@@ -59,6 +59,7 @@ func ServeRelay(ctx context.Context, cfg RelayConfig) error {
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprintln(w, "ok")
 	})
+	mux.HandleFunc("/kintsugi/admin/diskfree", r.gateAuth(r.handleDiskfree))
 	mux.HandleFunc("/kintsugi/", r.gateAuth(r.handleKintsugi))
 
 	httpServer := &http.Server{
@@ -138,6 +139,26 @@ func (r *relay) handleKintsugi(w http.ResponseWriter, req *http.Request) {
 	default:
 		http.Error(w, "not found", http.StatusNotFound)
 	}
+}
+
+// handleDiskfree returns disk-space stats for the relay's data dir, used by
+// the backfill client to decide whether it's safe to push ~1 GB of archive.
+func (r *relay) handleDiskfree(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	free, total, err := diskFree(r.cfg.DataDir)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"data_dir":    r.cfg.DataDir,
+		"free_bytes":  free,
+		"total_bytes": total,
+	})
 }
 
 func (r *relay) listSessions(w http.ResponseWriter) {

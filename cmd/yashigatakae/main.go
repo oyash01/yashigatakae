@@ -54,6 +54,7 @@ func main() {
 	root.AddCommand(newHandoffCmd())
 	root.AddCommand(newResumeCmd())
 	root.AddCommand(newSessionsCmd())
+	root.AddCommand(newBackfillCmd())
 	root.AddCommand(notYet("link", "v0.6", state.HelpLink))
 
 	if err := root.Execute(); err != nil {
@@ -522,6 +523,47 @@ func newGraphifyCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&refresh, "refresh", false, "Force regenerate even if recent")
 	cmd.Flags().StringVar(&outDir, "out", "", "Override output dir")
+	return cmd
+}
+
+func newBackfillCmd() *cobra.Command {
+	var dryRun, force, skipDisk bool
+	var limit int
+	var sinceStr string
+	cmd := &cobra.Command{
+		Use:   "backfill",
+		Short: "Encrypt + upload every transcript under ~/.claude/projects/ to the kintsugi relay (idempotent via ~/.yashigatakae/backfill.json ledger)",
+		RunE: func(c *cobra.Command, args []string) error {
+			ctx := context.Background()
+			var since time.Duration
+			if sinceStr != "" {
+				d, err := time.ParseDuration(sinceStr)
+				if err != nil {
+					return fmt.Errorf("invalid --since: %w", err)
+				}
+				since = d
+			}
+			rep, err := kintsugi.Backfill(ctx, kintsugi.BackfillOptions{
+				DryRun:        dryRun,
+				Limit:         limit,
+				Since:         since,
+				Force:         force,
+				SkipDiskCheck: skipDisk,
+			})
+			if err != nil {
+				return err
+			}
+			fmt.Printf("\n✓ backfill complete\n")
+			fmt.Printf("  scanned=%d uploaded=%d skipped=%d failed=%d\n", rep.Scanned, rep.Uploaded, rep.Skipped, rep.Failed)
+			fmt.Printf("  bytes_in=%d bytes_out=%d duration=%s\n", rep.BytesIn, rep.BytesOut, rep.FinishedAt.Sub(rep.StartedAt).Round(time.Millisecond))
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "List what would be uploaded; don't push")
+	cmd.Flags().IntVar(&limit, "limit", 0, "Cap the number of transcripts uploaded (0 = unlimited)")
+	cmd.Flags().StringVar(&sinceStr, "since", "", "Only consider transcripts modified within this duration (e.g. 720h for 30d)")
+	cmd.Flags().BoolVar(&force, "force", false, "Re-upload even if ledger says it's already there")
+	cmd.Flags().BoolVar(&skipDisk, "skip-disk-check", false, "Bypass relay disk-free pre-check (not recommended)")
 	return cmd
 }
 
