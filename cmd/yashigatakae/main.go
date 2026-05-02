@@ -47,6 +47,7 @@ func main() {
 	root.AddCommand(newMempalaceCmd())
 	root.AddCommand(newBifrostCmd())
 	root.AddCommand(newHooksCmd())
+	root.AddCommand(newKintsugiCmd())
 	root.AddCommand(notYet("graphify", "v0.4", graphify.Help))
 	root.AddCommand(notYet("hermes", "v0.5", hermes.Help))
 	root.AddCommand(notYet("handoff", "v0.3", kintsugi.HelpHandoff))
@@ -345,6 +346,37 @@ func newMempalaceCmd() *cobra.Command {
 		cmd.AddCommand(sub)
 	}
 
+	return cmd
+}
+
+func newKintsugiCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "kintsugi",
+		Short: "Cross-device session+worktree continuity (handoff / resume / serve)",
+	}
+	{
+		var addr, dataDir, apiKey string
+		sub := &cobra.Command{
+			Use:   "serve",
+			Short: "Run the kintsugi relay HTTP server (VPS-side)",
+			RunE: func(c *cobra.Command, args []string) error {
+				ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+				defer stop()
+				if apiKey == "" {
+					apiKey = os.Getenv("BIFROST_API_KEY")
+				}
+				return kintsugi.ServeRelay(ctx, kintsugi.RelayConfig{
+					Listen:  addr,
+					APIKey:  apiKey,
+					DataDir: dataDir,
+				})
+			},
+		}
+		sub.Flags().StringVar(&addr, "addr", "127.0.0.1:8444", "HTTP listen address")
+		sub.Flags().StringVar(&dataDir, "data", "", "Override data dir (default ~/.yashigatakae/kintsugi)")
+		sub.Flags().StringVar(&apiKey, "api-key", "", "Require Bearer auth (also reads BIFROST_API_KEY)")
+		cmd.AddCommand(sub)
+	}
 	return cmd
 }
 
