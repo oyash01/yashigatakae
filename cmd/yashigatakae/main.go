@@ -65,6 +65,20 @@ func main() {
 	root.AddCommand(newSessionsCmd())
 	root.AddCommand(newBackfillCmd())
 	root.AddCommand(notYet("link", "v0.6", state.HelpLink))
+	root.AddCommand(&cobra.Command{
+		Use:   "enable",
+		Short: "Wire all yashigatakae services to start at boot and restart forever (Linux/systemd; no-op on Mac/Win)",
+		RunE: func(c *cobra.Command, args []string) error {
+			return state.Enable()
+		},
+	})
+	root.AddCommand(&cobra.Command{
+		Use:   "disable",
+		Short: "Stop and disable all yashigatakae services (Linux/systemd; no-op on Mac/Win)",
+		RunE: func(c *cobra.Command, args []string) error {
+			return state.Disable()
+		},
+	})
 
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)

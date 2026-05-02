@@ -143,6 +143,25 @@ func readEnvVar(body, key string) string {
 	return ""
 }
 
+// hardenedService is the shared block of always-on options every yashigatakae
+// systemd unit gets. Tuned so:
+//   - any non-zero exit triggers a restart (Restart=always)
+//   - first restart fires after 3 s
+//   - the systemd start-rate-limit is disabled (StartLimitIntervalSec=0) so a
+//     pathological tight-crash loop still gets retried indefinitely instead of
+//     being held in a "failed" state after 5 starts
+//   - SIGTERM is sent on stop with a 10-second grace before SIGKILL
+//   - journal capture for both stdout + stderr
+const hardenedServiceBlock = `Restart=always
+RestartSec=3
+StartLimitIntervalSec=0
+TimeoutStopSec=10
+KillSignal=SIGTERM
+EnvironmentFile=-%s/.yashigatakae/secrets.env
+StandardOutput=journal
+StandardError=journal
+`
+
 func writeMempalaceUnit(yashi string) error {
 	unit := fmt.Sprintf(`[Unit]
 Description=yashigatakae mempalace MCP server (semantic memory)
@@ -152,12 +171,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 ExecStart=%s mempalace serve --addr 127.0.0.1:8765
-Restart=always
-RestartSec=3
-EnvironmentFile=-%s/.yashigatakae/secrets.env
-StandardOutput=journal
-StandardError=journal
-
+`+hardenedServiceBlock+`
 [Install]
 WantedBy=multi-user.target
 `, yashi, mustHome())
@@ -173,12 +187,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 ExecStart=%s kintsugi serve --addr 0.0.0.0:8444
-Restart=always
-RestartSec=3
-EnvironmentFile=-%s/.yashigatakae/secrets.env
-StandardOutput=journal
-StandardError=journal
-
+`+hardenedServiceBlock+`
 [Install]
 WantedBy=multi-user.target
 `, yashi, mustHome())
@@ -194,12 +203,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 ExecStart=%s hermes serve --poll 10s
-Restart=always
-RestartSec=10
-EnvironmentFile=-%s/.yashigatakae/secrets.env
-StandardOutput=journal
-StandardError=journal
-
+`+hardenedServiceBlock+`
 [Install]
 WantedBy=multi-user.target
 `, yashi, mustHome())
@@ -215,12 +219,7 @@ Wants=yashigatakae-mempalace.service network-online.target
 [Service]
 Type=simple
 ExecStart=%s bifrost serve --addr 0.0.0.0:8443 --mempalace http://127.0.0.1:8765/mcp
-Restart=always
-RestartSec=3
-EnvironmentFile=-%s/.yashigatakae/secrets.env
-StandardOutput=journal
-StandardError=journal
-
+`+hardenedServiceBlock+`
 [Install]
 WantedBy=multi-user.target
 `, yashi, mustHome())
