@@ -139,6 +139,40 @@ func newStateCmd() *cobra.Command {
 			return state.Pull()
 		},
 	})
+
+	{
+		var name, owner, template string
+		var public, noClone, noWrite bool
+		sub := &cobra.Command{
+			Use:   "init",
+			Short: "Create a new private state repo from the public template + wire STATE_REPO_URL",
+			Long: `Creates a new GitHub repo (default private) from the public template
+oyash01/yashigatakae-state-template under your account, clones it to
+~/.yashigatakae/state, and writes STATE_REPO_URL into ~/.yashigatakae/secrets.env
+so the next ` + "`yashigatakae init`" + ` picks it up automatically.
+
+Requires the gh CLI (https://cli.github.com) installed and authenticated as
+the user you want the repo created under.`,
+			RunE: func(c *cobra.Command, args []string) error {
+				return state.CreateStateRepo(state.CreateStateRepoOptions{
+					Name:        name,
+					Owner:       owner,
+					Private:     !public,
+					Template:    template,
+					NoClone:     noClone,
+					WriteSecret: !noWrite,
+				})
+			},
+		}
+		sub.Flags().StringVar(&name, "name", "yashigatakae-state", "Repo name (without owner)")
+		sub.Flags().StringVar(&owner, "owner", "", "GitHub user/org to create under (default: gh-authenticated user)")
+		sub.Flags().StringVar(&template, "template", "oyash01/yashigatakae-state-template", "Template repo (must be public or accessible)")
+		sub.Flags().BoolVar(&public, "public", false, "Create as public (default private — recommended)")
+		sub.Flags().BoolVar(&noClone, "no-clone", false, "Don't clone after creating")
+		sub.Flags().BoolVar(&noWrite, "no-write-secret", false, "Don't append STATE_REPO_URL to secrets.env")
+		cmd.AddCommand(sub)
+	}
+
 	return cmd
 }
 

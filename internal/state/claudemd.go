@@ -14,19 +14,32 @@ const (
 )
 
 // ensureClaudeMDSections idempotently appends the three yashigatakae-managed
-// sections to ~/.claude/CLAUDE.md if they aren't already present. The actual
-// section bodies live in the state repo at templates/CLAUDE.md.tmpl as a
-// single block; we read it and pluck out each section by its `## ` heading.
+// sections to ~/.claude/CLAUDE.md if they aren't already present.
+//
+// Source priority for the section bodies:
+//   1. State repo at <stateDir>/templates/CLAUDE.md.tmpl (user's customizations)
+//   2. Embedded fallback baked into the binary
+//
+// Lets users override the canned sections without losing them when the binary
+// updates.
 func ensureClaudeMDSections(claudeDir, stateDir string) error {
 	mdPath := filepath.Join(claudeDir, "CLAUDE.md")
-	srcPath := filepath.Join(stateDir, "templates", "CLAUDE.md.tmpl")
-
-	srcRaw, err := os.ReadFile(srcPath)
-	if err != nil {
-		fmt.Printf("  · no CLAUDE.md.tmpl in state repo — skipping section insert\n")
-		return nil
+	var src string
+	if stateDir != "" {
+		srcPath := filepath.Join(stateDir, "templates", "CLAUDE.md.tmpl")
+		if raw, err := os.ReadFile(srcPath); err == nil {
+			src = string(raw)
+		}
 	}
-	src := string(srcRaw)
+	if src == "" {
+		// Fall back to embedded.
+		raw, err := embedded.ReadFile("embedded/templates/CLAUDE.md.tmpl")
+		if err != nil {
+			fmt.Println("  · no CLAUDE.md.tmpl available — skipping section insert")
+			return nil
+		}
+		src = string(raw)
+	}
 
 	var existing string
 	if b, err := os.ReadFile(mdPath); err == nil {

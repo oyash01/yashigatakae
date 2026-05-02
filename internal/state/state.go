@@ -20,16 +20,22 @@ import (
 	"github.com/oyash01/yashigatakae/internal/osdetect"
 )
 
-// stateRepoCandidates is tried in order. The first that succeeds wins.
-//   1. github-oyash01 host alias  — set up by the user when they generated a
-//      dedicated key for the oyash01 account (`Host github-oyash01` in ~/.ssh/config).
-//      This is the recommended setup when the user has multiple GitHub accounts.
-//   2. github.com  — works if the default SSH key has access to oyash01's repos.
-//   3. HTTPS with GH_TOKEN  — final fallback for CI / token-based auth.
-var stateRepoCandidates = []string{
-	"git@github-oyash01:oyash01/yashigatakae-state.git",
-	"git@github.com:oyash01/yashigatakae-state.git",
-}
+// State-repo handling (v0.9.0+):
+//
+// The state-repo is a per-USER, typically PRIVATE GitHub repo where each
+// install stores its own custom skills, hooks overrides, and graphify wikis.
+// It is OPTIONAL — fresh installs work without it because every required
+// template + caveman hook is embedded in the binary itself (see embed.go).
+//
+// To use a personal state-repo, set STATE_REPO_URL in
+// ~/.yashigatakae/secrets.env. Examples:
+//
+//   STATE_REPO_URL=git@github.com:<you>/yashigatakae-state.git
+//   STATE_REPO_URL=https://x-access-token:<gh_pat>@github.com/<you>/yashi-state.git
+//
+// `yashigatakae state init` (added in v0.9.0) creates one for you from
+// the public template oyash01/yashigatakae-state-template.
+const stateRepoTemplateRepo = "oyash01/yashigatakae-state-template"
 
 type InitOptions struct {
 	VPS            bool
@@ -80,33 +86,54 @@ func Run(opts InitOptions) error {
 	}
 	fmt.Println()
 
-	// 2. obtain state repo
-	fmt.Println("[2/8] State repo")
+	// 2. extract embedded templates (always — embedded in the binary)
+	fmt.Println("[2/8] Render embedded templates + secrets.example.env")
+	user := os.Getenv("USER")
+	if user == "" {
+		user = os.Getenv("USERNAME")
+	}
+	if written, err := extractEmbeddedTemplates(claudeDir, home, user); err != nil {
+		return err
+	} else {
+		for _, p := range written {
+			fmt.Printf("  · wrote %s\n", p)
+		}
+	}
+	fmt.Println()
+
+	// 3. extract embedded hooks (caveman + statusline) — always
+	fmt.Println("[3/8] Install embedded caveman hooks")
+	if written, err := extractEmbeddedHooks(claudeDir); err != nil {
+		return err
+	} else {
+		fmt.Printf("  · installed %d hook script(s)\n", len(written))
+	}
+	fmt.Println()
+
+	// 4. optional state-repo (per-user, private). Skip if neither
+	//    --state-repo NOR STATE_REPO_URL is set.
+	fmt.Println("[4/8] Optional personal state repo (skills + custom hooks + wikis)")
 	stateDir, err := obtainStateRepo(yashDir, opts.LocalStateRepo)
 	if err != nil {
-		return err
+		fmt.Printf("  ! %s\n  (continuing without a state repo — embedded defaults still install)\n", err)
+		stateDir = ""
 	}
-	fmt.Printf("  · using state repo at %s\n\n", stateDir)
-
-	// 3. render templates → ~/.claude/
-	fmt.Println("[3/8] Render templates")
-	if err := renderTemplates(stateDir, claudeDir, home); err != nil {
-		return err
+	if stateDir != "" {
+		fmt.Printf("  · using state repo at %s\n", stateDir)
+		// Layered overrides: hooks/ + skills/ from state repo overlay on top of embedded.
+		if err := copyDirContents(filepath.Join(stateDir, "hooks"), filepath.Join(claudeDir, "hooks")); err != nil {
+			return err
+		}
+		if err := copySkills(filepath.Join(stateDir, "skills"), filepath.Join(claudeDir, "skills")); err != nil {
+			return err
+		}
+	} else {
+		fmt.Println("  · (no state repo configured — set STATE_REPO_URL in ~/.yashigatakae/secrets.env or run `yashigatakae state init` to create one)")
 	}
 	fmt.Println()
 
-	// 4. copy hooks
-	fmt.Println("[4/8] Install hooks")
-	if err := copyDirContents(filepath.Join(stateDir, "hooks"), filepath.Join(claudeDir, "hooks")); err != nil {
-		return err
-	}
-	fmt.Println()
-
-	// 5. copy skills (preserves any existing skill of same name unless it's clearly stale)
-	fmt.Println("[5/8] Install bundled skills")
-	if err := copySkills(filepath.Join(stateDir, "skills"), filepath.Join(claudeDir, "skills")); err != nil {
-		return err
-	}
+	// 5. (skills handled inside step 4)
+	fmt.Println("[5/8] Skills install handled in step 4 (state repo) + step 3 (caveman hooks)")
 	fmt.Println()
 
 	// 6. gstack
@@ -141,6 +168,11 @@ func Run(opts InitOptions) error {
 	return nil
 }
 
+// obtainStateRepo resolves the state repo path. Order:
+//   1. localOverride (e.g. dogfood `--state-repo /path`)
+//   2. existing clone at ~/.yashigatakae/state (just `git pull`)
+//   3. clone STATE_REPO_URL env var (typically the user's private repo)
+//   4. nothing — return ("", nil) so the caller can skip gracefully
 func obtainStateRepo(yashDir, localOverride string) (string, error) {
 	if localOverride != "" {
 		abs, err := filepath.Abs(localOverride)
@@ -154,63 +186,28 @@ func obtainStateRepo(yashDir, localOverride string) (string, error) {
 	}
 
 	dest := filepath.Join(yashDir, "state")
-	if _, err := os.Stat(filepath.Join(dest, ".git")); os.IsNotExist(err) {
-		fmt.Printf("  · cloning yashigatakae-state into %s\n", dest)
-		if err := cloneStateRepo(dest); err != nil {
-			return "", err
-		}
-	} else {
+	if _, err := os.Stat(filepath.Join(dest, ".git")); err == nil {
+		// Already cloned — refresh it.
 		pull := exec.Command("git", "-C", dest, "pull", "--ff-only")
 		_ = pull.Run() // non-fatal
+		return dest, nil
+	}
+
+	url := os.Getenv("STATE_REPO_URL")
+	if url == "" {
+		return "", nil // user hasn't configured one — let caller handle
+	}
+	fmt.Printf("  · cloning %s into %s\n", url, dest)
+	cmd := exec.Command("git", "clone", "--single-branch", "--depth", "1", url, dest)
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("clone state repo (set STATE_REPO_URL in ~/.yashigatakae/secrets.env or run `yashigatakae state init`): %w", err)
 	}
 	return dest, nil
 }
 
-// cloneStateRepo tries each candidate URL in turn (SSH alias → SSH default →
-// HTTPS+GH_TOKEN). Suppresses the per-attempt git output to avoid spamming
-// "Repository not found" messages for fallback paths the user wasn't expecting.
-func cloneStateRepo(dest string) error {
-	for i, url := range stateRepoCandidates {
-		_ = os.RemoveAll(dest)
-		cmd := exec.Command("git", "clone", "--single-branch", "--depth", "1", url, dest)
-		// Capture (don't stream) stderr so silently-failing fallback attempts
-		// don't print confusing errors. Only the final failure surfaces them.
-		var stderr strings.Builder
-		cmd.Stderr = &stderr
-		if err := cmd.Run(); err == nil {
-			if i > 0 {
-				fmt.Printf("  · cloned via %s (fallback)\n", url)
-			} else {
-				fmt.Printf("  · cloned via %s\n", url)
-			}
-			return nil
-		}
-	}
-	_ = os.RemoveAll(dest)
-
-	if tok := os.Getenv("GH_TOKEN"); tok != "" {
-		fmt.Println("  · SSH attempts failed; retrying HTTPS with GH_TOKEN")
-		url := "https://x-access-token:" + tok + "@github.com/oyash01/yashigatakae-state.git"
-		cmd := exec.Command("git", "clone", "--single-branch", "--depth", "1", url, dest)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err == nil {
-			return nil
-		}
-		_ = os.RemoveAll(dest)
-	}
-
-	return fmt.Errorf(`git clone yashigatakae-state failed.
-
-The state repo is PRIVATE. To clone it on this machine, add a GitHub SSH key
-authorized for oyash01/yashigatakae-state (one-time setup):
-
-  ssh-keygen -t ed25519 -f ~/.ssh/id_oyash01 -C "oyash01@$(hostname -s)"
-  cat ~/.ssh/id_oyash01.pub      # paste at https://github.com/settings/keys (signed in as oyash01)
-
-Then re-run yashigatakae init. Alternatively, set GH_TOKEN to a fine-grained PAT
-with read access to oyash01/yashigatakae-state and re-run init`)
-}
+// (Legacy multi-URL clone helper removed in v0.9.0 — state-repo is now
+// per-user and STATE_REPO_URL-driven. See obtainStateRepo above.)
 
 // renderTemplates expands every *.tmpl file under stateDir/templates into
 // claudeDir, dropping the .tmpl suffix. The data map exposes ${HOME} and ${USER}.

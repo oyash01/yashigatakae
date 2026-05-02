@@ -1,0 +1,37 @@
+# {{.USER}} — Claude Code Global Instructions
+
+> Managed by yashigatakae. Sections marked `## gstack`, `## caveman`, and `## kintsugi (cross-device continuity)` are kept in sync across machines.
+> Keep your personal identity, project context, and any other sections above or between these markers — they will be preserved on re-render.
+
+## gstack
+
+Use the **`/browse` skill from gstack** for ALL web browsing.
+**Never** use `mcp__claude-in-chrome__*` tools — `/browse` replaces them with a faster, lower-token-cost path through a local Chromium binary.
+
+### Available gstack skills
+/office-hours, /plan-ceo-review, /plan-eng-review, /plan-design-review,
+/design-consultation, /design-shotgun, /design-html, /review, /ship,
+/land-and-deploy, /canary, /benchmark, /browse, /connect-chrome, /qa,
+/qa-only, /design-review, /setup-browser-cookies, /setup-deploy,
+/setup-gbrain, /retro, /investigate, /document-release, /codex, /cso,
+/autoplan, /plan-devex-review, /devex-review, /careful, /freeze, /guard,
+/unfreeze, /gstack-upgrade, /learn
+
+To update: `/gstack-upgrade`
+
+## caveman
+
+Caveman is a token-saving compression layer activated by SessionStart and UserPromptSubmit hooks installed by yashigatakae. It enforces:
+- Output cap rules (no fluff, no apology preambles, no padding summaries)
+- Per-session level: `lite | full | ultra | off` (default `full`)
+- Switch via `/caveman lite`, `/caveman full`, `/caveman ultra`, `stop caveman`, or `yashigatakae caveman <level>` from the shell
+
+Code, commits, and PRs are written normally — caveman applies only to chat output. Errors are quoted exactly. Multi-step destructive sequences are written normally to avoid misread.
+
+## kintsugi (cross-device continuity)
+
+`yashigatakae handoff` flushes the current session + working tree to the VPS as an encrypted blob. On any other machine running yashigatakae, `yashigatakae resume` pulls it back and restores: the Claude Code session JSONL, the project memory dir, and the working tree (including uncommitted changes).
+
+If local changes diverge from the remote handoff, kintsugi prompts: keep-local, keep-remote, or save-local-as-stash-then-take-remote. The VPS sees only ciphertext + minimal metadata (machine, session id, timestamp) — your code never leaves your control plane unencrypted.
+
+Coding still runs locally. Kintsugi is a relay, not an executor.
