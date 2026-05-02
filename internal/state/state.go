@@ -20,9 +20,16 @@ import (
 	"github.com/oyash01/yashigatakae/internal/osdetect"
 )
 
-const (
-	stateRepoURL = "https://github.com/oyash01/yashigatakae-state.git"
-)
+// stateRepoCandidates is tried in order. The first that succeeds wins.
+//   1. github-oyash01 host alias  — set up by the user when they generated a
+//      dedicated key for the oyash01 account (`Host github-oyash01` in ~/.ssh/config).
+//      This is the recommended setup when the user has multiple GitHub accounts.
+//   2. github.com  — works if the default SSH key has access to oyash01's repos.
+//   3. HTTPS with GH_TOKEN  — final fallback for CI / token-based auth.
+var stateRepoCandidates = []string{
+	"git@github-oyash01:oyash01/yashigatakae-state.git",
+	"git@github.com:oyash01/yashigatakae-state.git",
+}
 
 type InitOptions struct {
 	VPS            bool
@@ -146,17 +153,60 @@ func obtainStateRepo(yashDir, localOverride string) (string, error) {
 	dest := filepath.Join(yashDir, "state")
 	if _, err := os.Stat(filepath.Join(dest, ".git")); os.IsNotExist(err) {
 		fmt.Printf("  · cloning yashigatakae-state into %s\n", dest)
-		clone := exec.Command("git", "clone", "--single-branch", "--depth", "1", stateRepoURL, dest)
-		clone.Stdout = os.Stdout
-		clone.Stderr = os.Stderr
-		if err := clone.Run(); err != nil {
-			return "", fmt.Errorf("git clone yashigatakae-state: %w (private repo — auth via gh or a deploy key)", err)
+		if err := cloneStateRepo(dest); err != nil {
+			return "", err
 		}
 	} else {
 		pull := exec.Command("git", "-C", dest, "pull", "--ff-only")
 		_ = pull.Run() // non-fatal
 	}
 	return dest, nil
+}
+
+// cloneStateRepo tries each candidate URL in turn (SSH alias → SSH default →
+// HTTPS+GH_TOKEN). Suppresses the per-attempt git output to avoid spamming
+// "Repository not found" messages for fallback paths the user wasn't expecting.
+func cloneStateRepo(dest string) error {
+	for i, url := range stateRepoCandidates {
+		_ = os.RemoveAll(dest)
+		cmd := exec.Command("git", "clone", "--single-branch", "--depth", "1", url, dest)
+		// Capture (don't stream) stderr so silently-failing fallback attempts
+		// don't print confusing errors. Only the final failure surfaces them.
+		var stderr strings.Builder
+		cmd.Stderr = &stderr
+		if err := cmd.Run(); err == nil {
+			if i > 0 {
+				fmt.Printf("  · cloned via %s (fallback)\n", url)
+			} else {
+				fmt.Printf("  · cloned via %s\n", url)
+			}
+			return nil
+		}
+	}
+	_ = os.RemoveAll(dest)
+
+	if tok := os.Getenv("GH_TOKEN"); tok != "" {
+		fmt.Println("  · SSH attempts failed; retrying HTTPS with GH_TOKEN")
+		url := "https://x-access-token:" + tok + "@github.com/oyash01/yashigatakae-state.git"
+		cmd := exec.Command("git", "clone", "--single-branch", "--depth", "1", url, dest)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err == nil {
+			return nil
+		}
+		_ = os.RemoveAll(dest)
+	}
+
+	return fmt.Errorf(`git clone yashigatakae-state failed.
+
+The state repo is PRIVATE. To clone it on this machine, add a GitHub SSH key
+authorized for oyash01/yashigatakae-state (one-time setup):
+
+  ssh-keygen -t ed25519 -f ~/.ssh/id_oyash01 -C "oyash01@$(hostname -s)"
+  cat ~/.ssh/id_oyash01.pub      # paste at https://github.com/settings/keys (signed in as oyash01)
+
+Then re-run yashigatakae init. Alternatively, set GH_TOKEN to a fine-grained PAT
+with read access to oyash01/yashigatakae-state and re-run init`)
 }
 
 // renderTemplates expands every *.tmpl file under stateDir/templates into
