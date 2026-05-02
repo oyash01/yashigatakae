@@ -47,14 +47,24 @@ func RunVPS() error {
 	if err := writeBifrostUnit(yashi); err != nil {
 		return err
 	}
+	if err := writeKintsugiUnit(yashi); err != nil {
+		return err
+	}
+	if err := writeHermesUnit(yashi); err != nil {
+		return err
+	}
 
 	// 3. Reload + enable + start
 	for _, args := range [][]string{
 		{"daemon-reload"},
 		{"enable", "yashigatakae-mempalace.service"},
 		{"enable", "yashigatakae-bifrost.service"},
+		{"enable", "yashigatakae-kintsugi.service"},
+		{"enable", "yashigatakae-hermes.service"},
 		{"restart", "yashigatakae-mempalace.service"},
 		{"restart", "yashigatakae-bifrost.service"},
+		{"restart", "yashigatakae-kintsugi.service"},
+		{"restart", "yashigatakae-hermes.service"},
 	} {
 		cmd := exec.Command("systemctl", args...)
 		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
@@ -152,6 +162,48 @@ StandardError=journal
 WantedBy=multi-user.target
 `, yashi, mustHome())
 	return os.WriteFile("/etc/systemd/system/yashigatakae-mempalace.service", []byte(unit), 0o644)
+}
+
+func writeKintsugiUnit(yashi string) error {
+	unit := fmt.Sprintf(`[Unit]
+Description=yashigatakae kintsugi relay (cross-device session blobs)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%s kintsugi serve --addr 0.0.0.0:8444
+Restart=always
+RestartSec=3
+EnvironmentFile=-%s/.yashigatakae/secrets.env
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+`, yashi, mustHome())
+	return os.WriteFile("/etc/systemd/system/yashigatakae-kintsugi.service", []byte(unit), 0o644)
+}
+
+func writeHermesUnit(yashi string) error {
+	unit := fmt.Sprintf(`[Unit]
+Description=yashigatakae hermes worker (background self-learning agent)
+After=network-online.target yashigatakae-mempalace.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%s hermes serve --poll 10s
+Restart=always
+RestartSec=10
+EnvironmentFile=-%s/.yashigatakae/secrets.env
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+`, yashi, mustHome())
+	return os.WriteFile("/etc/systemd/system/yashigatakae-hermes.service", []byte(unit), 0o644)
 }
 
 func writeBifrostUnit(yashi string) error {

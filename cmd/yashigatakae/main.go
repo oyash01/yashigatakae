@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"strconv"
 	"syscall"
+	"time"
 
 	"github.com/oyash01/yashigatakae/internal/bifrost"
 	"github.com/oyash01/yashigatakae/internal/caveman"
@@ -49,7 +50,7 @@ func main() {
 	root.AddCommand(newHooksCmd())
 	root.AddCommand(newKintsugiCmd())
 	root.AddCommand(newGraphifyCmd())
-	root.AddCommand(notYet("hermes", "v0.5", hermes.Help))
+	root.AddCommand(newHermesCmd())
 	root.AddCommand(newHandoffCmd())
 	root.AddCommand(newResumeCmd())
 	root.AddCommand(newSessionsCmd())
@@ -343,6 +344,139 @@ func newMempalaceCmd() *cobra.Command {
 			},
 		}
 		sub.Flags().StringVar(&addr, "addr", "127.0.0.1:8765", "HTTP listen address")
+		cmd.AddCommand(sub)
+	}
+
+	return cmd
+}
+
+func newHermesCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "hermes",
+		Short: "Background self-learning agent (queue / serve / ls / logs / cancel)",
+		RunE: func(c *cobra.Command, args []string) error {
+			fmt.Println(hermes.Help())
+			return nil
+		},
+	}
+
+	{
+		var project, cwd, prompt, note string
+		sub := &cobra.Command{
+			Use:   "enqueue",
+			Short: "Add a Claude task to the queue",
+			RunE: func(c *cobra.Command, args []string) error {
+				if prompt == "" && len(args) > 0 {
+					prompt = joinArgs(args)
+				}
+				id, err := hermes.Enqueue(context.Background(), hermes.Task{
+					Project: project,
+					CWD:     cwd,
+					Prompt:  prompt,
+					Note:    note,
+				})
+				if err != nil {
+					return err
+				}
+				fmt.Printf("✓ enqueued #%d project=%s\n", id, project)
+				return nil
+			},
+		}
+		sub.Flags().StringVar(&project, "project", "", "Project label (required)")
+		sub.Flags().StringVar(&cwd, "cwd", "", "Working dir for `claude -p`")
+		sub.Flags().StringVar(&prompt, "prompt", "", "Prompt text (or pass as positional args)")
+		sub.Flags().StringVar(&note, "note", "", "Free-text note saved on the task row")
+		cmd.AddCommand(sub)
+	}
+
+	{
+		var status string
+		var limit int
+		sub := &cobra.Command{
+			Use:   "ls",
+			Short: "List tasks (newest first)",
+			RunE: func(c *cobra.Command, args []string) error {
+				tasks, err := hermes.List(context.Background(), status, limit)
+				if err != nil {
+					return err
+				}
+				if len(tasks) == 0 {
+					fmt.Println("(no tasks)")
+					return nil
+				}
+				for _, t := range tasks {
+					p := t.Prompt
+					if len(p) > 60 {
+						p = p[:60] + "…"
+					}
+					fmt.Printf("  #%-5d  %-9s  %-12s  %s\n", t.ID, t.Status, t.Project, p)
+				}
+				return nil
+			},
+		}
+		sub.Flags().StringVar(&status, "status", "", "Filter: pending|running|done|failed|cancelled")
+		sub.Flags().IntVar(&limit, "limit", 50, "Max rows")
+		cmd.AddCommand(sub)
+	}
+
+	cmd.AddCommand(&cobra.Command{
+		Use:   "logs <id>",
+		Short: "Stream the log for a task",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(c *cobra.Command, args []string) error {
+			id, err := strconv.ParseInt(args[0], 10, 64)
+			if err != nil {
+				return err
+			}
+			return hermes.TailLogs(context.Background(), id, os.Stdout)
+		},
+	})
+
+	cmd.AddCommand(&cobra.Command{
+		Use:   "cancel <id>",
+		Short: "Mark a pending or running task as cancelled",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(c *cobra.Command, args []string) error {
+			id, err := strconv.ParseInt(args[0], 10, 64)
+			if err != nil {
+				return err
+			}
+			ok, err := hermes.Cancel(context.Background(), id)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				fmt.Printf("? task #%d not in pending/running\n", id)
+			} else {
+				fmt.Printf("✓ cancelled #%d\n", id)
+			}
+			return nil
+		},
+	})
+
+	{
+		var poll, claudeBin string
+		var noLessons bool
+		sub := &cobra.Command{
+			Use:   "serve",
+			Short: "Run the worker loop (foreground; systemd unit on VPS)",
+			RunE: func(c *cobra.Command, args []string) error {
+				ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+				defer stop()
+				d, err := time.ParseDuration(poll)
+				if err != nil {
+					return fmt.Errorf("invalid --poll: %w", err)
+				}
+				return hermes.Serve(ctx, hermes.WorkerOptions{
+					PollInterval: d,
+					ClaudeBin:    claudeBin,
+					WriteLessons: !noLessons,
+				})
+			},
+		}
+		sub.Flags().StringVar(&poll, "poll", "5s", "How often to check for new tasks")
+		sub.Flags().StringVar(&claudeBin, "claude", "claude", "Path to the claude binary")
+		sub.Flags().BoolVar(&noLessons, "no-lessons", false, "Skip writing the final output as a mempalace lesson")
 		cmd.AddCommand(sub)
 	}
 

@@ -48,7 +48,7 @@ Plus a wrap of [gstack](https://github.com/garrytan/gstack), installed automatic
 - **v0.2** — mempalace + bifrost. Lifetime semantic memory store, single MCP gateway, SessionEnd auto-sweep, VPS systemd deploy. ✓
 - **v0.3** — kintsugi (the travel scenario): `handoff` packs + age-encrypts the active session + memory, uploads to relay; `resume` on any other machine restores it. ✓
 - **v0.4** — graphify minimal: per-repo `overview.md`, `recent.md`, `index.md`, `files.json` (LSP/tree-sitter polish in v0.4.1). ✓
-- **v0.5** — hermes ← *next*
+- **v0.5** — hermes background self-learning agent (queue + worker + lesson distillation into mempalace). VPS systemd unit. ✓
 - **v0.6** — self-update + drift detection
 - **v0.7** — hardening + vanity domain `get.yashigatakae.sh` + fsnotify watcher (kintsugi auto-checkpoint)
 
