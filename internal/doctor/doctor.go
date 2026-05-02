@@ -3,6 +3,7 @@
 package doctor
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"github.com/oyash01/yashigatakae/internal/caveman"
 	"github.com/oyash01/yashigatakae/internal/deps"
 	"github.com/oyash01/yashigatakae/internal/gstack"
+	"github.com/oyash01/yashigatakae/internal/mempalace"
 	"github.com/oyash01/yashigatakae/internal/osdetect"
 )
 
@@ -74,6 +76,11 @@ func Run() error {
 		checks = append(checks, claudeMDHas(claudeDir, marker))
 	}
 
+	// ── mempalace store (sqlite db opens cleanly + schema applied)
+	checks = append(checks, mempalaceCheck())
+
+	_ = home // (silence unused if any future code path needs it)
+
 	pass := 0
 	for _, c := range checks {
 		mark := "✗"
@@ -126,6 +133,19 @@ func skillLinked(claudeDir, name string) check {
 		return check{name: "skill:" + name, pass: true}
 	}
 	return check{name: "skill:" + name, pass: false, hint: "not installed yet"}
+}
+
+func mempalaceCheck() check {
+	store, err := mempalace.Open()
+	if err != nil {
+		return check{name: "mempalace store", pass: false, hint: err.Error()}
+	}
+	defer store.Close()
+	stats, err := store.Stats(context.Background())
+	if err != nil {
+		return check{name: "mempalace store", pass: false, hint: err.Error()}
+	}
+	return check{name: fmt.Sprintf("mempalace store (%d entries)", stats.TotalEntries), pass: true}
 }
 
 func claudeMDHas(claudeDir, marker string) check {

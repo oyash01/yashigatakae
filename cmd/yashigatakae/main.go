@@ -3,8 +3,11 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 
 	"github.com/oyash01/yashigatakae/internal/bifrost"
 	"github.com/oyash01/yashigatakae/internal/caveman"
@@ -38,9 +41,9 @@ func main() {
 	root.AddCommand(newStatusCmd())
 	root.AddCommand(newSyncCmd())
 	root.AddCommand(newUpgradeCmd())
+	root.AddCommand(newMempalaceCmd())
 
 	// v0.2+ — stubs that print a friendly "not yet" message
-	root.AddCommand(notYet("mempalace", "v0.2", mempalace.Help))
 	root.AddCommand(notYet("bifrost", "v0.2", bifrost.Help))
 	root.AddCommand(notYet("graphify", "v0.4", graphify.Help))
 	root.AddCommand(notYet("hermes", "v0.5", hermes.Help))
@@ -188,4 +191,152 @@ func notYet(name, milestone string, help func() string) *cobra.Command {
 			return nil
 		},
 	}
+}
+
+func newMempalaceCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "mempalace",
+		Short: "Lifetime semantic memory store (remember / recall / forget / stats)",
+	}
+
+	// remember
+	{
+		var project, tags, source string
+		sub := &cobra.Command{
+			Use:   "remember <text>",
+			Short: "Store a memory entry (semantically embedded if API key is set)",
+			Args:  cobra.MinimumNArgs(1),
+			RunE: func(c *cobra.Command, args []string) error {
+				body := joinArgs(args)
+				id, err := mempalace.Remember(context.Background(), mempalace.RememberOptions{
+					Body:    body,
+					Source:  source,
+					Project: project,
+					Tags:    tags,
+				})
+				if err != nil {
+					return err
+				}
+				fmt.Printf("✓ remembered #%d\n", id)
+				return nil
+			},
+		}
+		sub.Flags().StringVar(&project, "project", "", "Project tag (e.g. ghostnode)")
+		sub.Flags().StringVar(&tags, "tags", "", "Comma-separated tags")
+		sub.Flags().StringVar(&source, "source", "cli", "Source label (cli, hook, hermes, etc.)")
+		cmd.AddCommand(sub)
+	}
+
+	// recall
+	{
+		var top int
+		var project string
+		var asJSON bool
+		sub := &cobra.Command{
+			Use:   "recall <query>",
+			Short: "Search memory by semantic similarity (or keyword fallback)",
+			Args:  cobra.MinimumNArgs(1),
+			RunE: func(c *cobra.Command, args []string) error {
+				query := joinArgs(args)
+				hits, err := mempalace.Recall(context.Background(), mempalace.RecallOptions{
+					Query:   query,
+					TopK:    top,
+					Project: project,
+				})
+				if err != nil {
+					return err
+				}
+				if asJSON {
+					b, _ := json.MarshalIndent(hits, "", "  ")
+					fmt.Println(string(b))
+					return nil
+				}
+				if len(hits) == 0 {
+					fmt.Println("(no hits)")
+					return nil
+				}
+				for _, h := range hits {
+					body := h.Body
+					if len(body) > 200 {
+						body = body[:200] + "…"
+					}
+					fmt.Printf("  #%-5d  %.3f  [%s/%s]  %s\n", h.ID, h.Score, h.Source, h.Project, body)
+				}
+				return nil
+			},
+		}
+		sub.Flags().IntVar(&top, "top", 10, "Max number of hits to return")
+		sub.Flags().StringVar(&project, "project", "", "Limit search to one project")
+		sub.Flags().BoolVar(&asJSON, "json", false, "Output as JSON")
+		cmd.AddCommand(sub)
+	}
+
+	// forget
+	{
+		sub := &cobra.Command{
+			Use:   "forget <id>",
+			Short: "Delete a memory entry by ID",
+			Args:  cobra.ExactArgs(1),
+			RunE: func(c *cobra.Command, args []string) error {
+				id, err := strconv.ParseInt(args[0], 10, 64)
+				if err != nil {
+					return fmt.Errorf("id must be integer: %w", err)
+				}
+				ok, err := mempalace.Forget(context.Background(), id)
+				if err != nil {
+					return err
+				}
+				if !ok {
+					fmt.Printf("? no entry with id=%d\n", id)
+					return nil
+				}
+				fmt.Printf("✓ forgot #%d\n", id)
+				return nil
+			},
+		}
+		cmd.AddCommand(sub)
+	}
+
+	// stats
+	{
+		var asJSON bool
+		sub := &cobra.Command{
+			Use:   "stats",
+			Short: "Show entry counts and store path",
+			RunE: func(c *cobra.Command, args []string) error {
+				stats, err := mempalace.Stats(context.Background())
+				if err != nil {
+					return err
+				}
+				if asJSON {
+					b, _ := json.MarshalIndent(stats, "", "  ")
+					fmt.Println(string(b))
+					return nil
+				}
+				fmt.Printf("  path:           %s\n", stats.Path)
+				fmt.Printf("  total_entries:  %d\n", stats.TotalEntries)
+				fmt.Printf("  with_embedding: %d\n", stats.WithEmbedding)
+				fmt.Printf("  size_bytes:     %d\n", stats.SizeBytes)
+				if len(stats.Projects) > 0 {
+					fmt.Printf("  projects:       %v\n", stats.Projects)
+				}
+				return nil
+			},
+		}
+		sub.Flags().BoolVar(&asJSON, "json", false, "Output as JSON")
+		cmd.AddCommand(sub)
+	}
+
+	return cmd
+}
+
+func joinArgs(args []string) string {
+	out := ""
+	for i, a := range args {
+		if i > 0 {
+			out += " "
+		}
+		out += a
+	}
+	return out
 }
