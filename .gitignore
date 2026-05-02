@@ -1,0 +1,15 @@
+/yashigatakae
+/dist/
+/build/
+*.exe
+*.test
+*.out
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# local config
+~/.yashigatakae/
+secrets.env

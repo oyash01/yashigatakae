@@ -1,0 +1,61 @@
+# yashigatakae
+
+> Claude Code orchestrator + lifetime memory + cross-device continuity.
+> One Go binary. Works on Mac, Windows, Linux, and your VPS.
+
+`yashigatakae` keeps your Claude Code environment in sync across every machine you use, while giving Claude itself persistent memory, a single MCP gateway, and the ability to continue a conversation on a different device exactly where you left off — including uncommitted code in the working tree.
+
+**Coding stays local.** The VPS is a brain (memory, gateway, background agent, cross-device relay). Builds and tests run on your laptop or desktop, never on the VPS.
+
+## Install
+
+### Mac / Linux
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/oyash01/yashigatakae/main/installers/install.sh | sh
+```
+
+### Windows (PowerShell)
+
+```powershell
+irm https://raw.githubusercontent.com/oyash01/yashigatakae/main/installers/install.ps1 | iex
+```
+
+Then on every machine:
+
+```bash
+yashigatakae init
+```
+
+## What's in the binary
+
+Six pillars, each a `yashigatakae <name>` subcommand:
+
+| Pillar | Job |
+|---|---|
+| **caveman** | Token-saving rules baked into hooks |
+| **graphify** | Codebase graph + wiki so Claude reads a map, not the repo |
+| **mempalace** | Lifetime semantic memory store (sqlite + sqlite-vec) |
+| **bifrost** | One MCP endpoint that fans out to N MCP servers |
+| **hermes** | Self-learning background agent on the VPS |
+| **kintsugi** | Cross-device session + working-tree continuity |
+
+Plus a wrap of [gstack](https://github.com/garrytan/gstack), installed automatically by `yashigatakae init`.
+
+## Roadmap
+
+- **v0.1** — Skeleton + `init` (Mac/Linux/Windows). gstack wrap, caveman hooks, state-repo render, doctor. ← *current*
+- **v0.2** — mempalace + bifrost
+- **v0.3** — kintsugi (the travel scenario)
+- **v0.4** — graphify
+- **v0.5** — hermes
+- **v0.6** — self-update + drift detection
+- **v0.7** — hardening + vanity domain `get.yashigatakae.sh`
+
+## License
+
+MIT.
+
+---
+
+by [@OYash01](https://github.com/oyash01) · TeamOYash Technologies
