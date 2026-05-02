@@ -33,7 +33,8 @@ type InitOptions struct {
 
 // Run executes the v0.1 init flow.
 func Run(opts InitOptions) error {
-	fmt.Println("yashigatakae init — bootstrapping this machine\n")
+	fmt.Println("yashigatakae init — bootstrapping this machine")
+	fmt.Println()
 
 	osID := osdetect.Detect()
 	home, err := osdetect.HomeDir()
@@ -160,6 +161,11 @@ func obtainStateRepo(yashDir, localOverride string) (string, error) {
 
 // renderTemplates expands every *.tmpl file under stateDir/templates into
 // claudeDir, dropping the .tmpl suffix. The data map exposes ${HOME} and ${USER}.
+//
+// IMPORTANT: templates are STARTERS, not authoritative state. If a target file
+// already exists in claudeDir (e.g. the user has customized their settings.json
+// or CLAUDE.md), we leave it alone — the mcp / hooks / claudemd packages all
+// merge into existing files. Overwriting on every init would destroy user data.
 func renderTemplates(stateDir, claudeDir, home string) error {
 	tmplDir := filepath.Join(stateDir, "templates")
 	entries, err := os.ReadDir(tmplDir)
@@ -183,7 +189,16 @@ func renderTemplates(stateDir, claudeDir, home string) error {
 			continue
 		}
 		src := filepath.Join(tmplDir, e.Name())
-		dst := filepath.Join(claudeDir, strings.TrimSuffix(e.Name(), ".tmpl"))
+		dstName := strings.TrimSuffix(e.Name(), ".tmpl")
+		dst := filepath.Join(claudeDir, dstName)
+
+		// Skip if destination already has content — preserve user data.
+		// Empty files (size 0) are treated as not-yet-initialized and rendered.
+		if info, statErr := os.Stat(dst); statErr == nil && info.Size() > 0 {
+			fmt.Printf("  · %s exists (%d bytes) — preserved (template is starter only)\n", dstName, info.Size())
+			continue
+		}
+
 		raw, err := os.ReadFile(src)
 		if err != nil {
 			return err
@@ -201,7 +216,7 @@ func renderTemplates(stateDir, claudeDir, home string) error {
 			return fmt.Errorf("render %s: %w", src, err)
 		}
 		f.Close()
-		fmt.Printf("  · %s → %s\n", e.Name(), dst)
+		fmt.Printf("  · %s → %s (rendered fresh)\n", e.Name(), dst)
 	}
 	return nil
 }

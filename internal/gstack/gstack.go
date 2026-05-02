@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 
+	"github.com/oyash01/yashigatakae/internal/deps"
 	"github.com/oyash01/yashigatakae/internal/osdetect"
 )
 
@@ -47,18 +48,44 @@ func Install() error {
 		_ = pull.Run() // non-fatal — local edits are allowed
 	}
 
-	// Run ./setup. Pass GSTACK_FLAT=1 if gstack respects it; otherwise the user is
-	// prompted at the terminal — `yashigatakae init` is intended to be run interactively.
-	setup := exec.Command("./setup")
+	// Run ./setup --no-prefix. We pass the flag explicitly so flat skill names
+	// (/qa, /browse, /ship) are guaranteed even on first run with a TTY. With
+	// no TTY, gstack would default to flat anyway, but the flag is harmless.
+	setup := exec.Command("./setup", "--no-prefix")
 	setup.Dir = dest
-	setup.Env = append(os.Environ(), "GSTACK_NO_PREFIX=1")
+	// Augment PATH so gstack's setup (and the browse binary it builds) can
+	// find bun even when it lives at ~/.bun/bin and the user's PATH hasn't
+	// been updated yet (e.g. fresh machine after `curl bun.sh/install | bash`).
+	env := os.Environ()
+	if extra := deps.FallbackPATH(); extra != "" {
+		env = appendPath(env, extra)
+	}
+	setup.Env = env
 	setup.Stdin = os.Stdin
 	setup.Stdout = os.Stdout
 	setup.Stderr = os.Stderr
 	if err := setup.Run(); err != nil {
-		return fmt.Errorf("gstack ./setup: %w", err)
+		return fmt.Errorf("gstack ./setup --no-prefix: %w", err)
 	}
 	return nil
+}
+
+// appendPath prepends extra entries to PATH in the given env slice.
+func appendPath(env []string, extra string) []string {
+	out := make([]string, 0, len(env))
+	pathSet := false
+	for _, e := range env {
+		if len(e) >= 5 && e[:5] == "PATH=" {
+			out = append(out, "PATH="+extra+string(os.PathListSeparator)+e[5:])
+			pathSet = true
+		} else {
+			out = append(out, e)
+		}
+	}
+	if !pathSet {
+		out = append(out, "PATH="+extra)
+	}
+	return out
 }
 
 // Path returns ~/.claude/skills/gstack — useful for doctor checks.

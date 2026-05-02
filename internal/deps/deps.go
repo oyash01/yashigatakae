@@ -3,7 +3,9 @@ package deps
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -27,6 +29,7 @@ func Check() []Status {
 		{"curl", []string{"curl", "--version"}, "curl ships on macOS/Linux by default; on Windows install via winget"},
 		{"node", []string{"node", "--version"}, "install Node 20+: https://nodejs.org/ (gstack browse needs it)"},
 		{"npm", []string{"npm", "--version"}, "ships with node"},
+		{"bun", []string{"bun", "--version"}, "install bun (gstack browse compiler): curl -fsSL https://bun.sh/install | bash"},
 		{"claude", []string{"claude", "--version"}, "install Claude Code: https://claude.com/claude-code"},
 	}
 	out := make([]Status, 0, len(checks))
@@ -34,16 +37,62 @@ func Check() []Status {
 		s := Status{Name: c.name, Hint: c.hint}
 		path, err := exec.LookPath(c.cmd[0])
 		if err != nil {
-			out = append(out, s)
-			continue
+			// Some installers (bun, cargo, ghcup, ...) drop binaries into well-known
+			// user-local dirs that aren't on PATH by default. Probe a small list before
+			// giving up — saves the user a fight with their shell rc on first install.
+			if alt := lookupFallback(c.cmd[0]); alt != "" {
+				path = alt
+			} else {
+				out = append(out, s)
+				continue
+			}
 		}
 		s.Path = path
-		v, _ := exec.Command(c.cmd[0], c.cmd[1:]...).Output()
+		args := append([]string{}, c.cmd[1:]...)
+		v, _ := exec.Command(path, args...).Output()
 		s.Version = strings.TrimSpace(string(v))
 		s.OK = true
 		out = append(out, s)
 	}
 	return out
+}
+
+// lookupFallback checks common per-user install dirs that aren't usually on
+// PATH. Returns "" if nothing found.
+func lookupFallback(name string) string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	candidates := []string{
+		filepath.Join(home, ".bun", "bin", name),
+		filepath.Join(home, ".cargo", "bin", name),
+		filepath.Join(home, ".local", "bin", name),
+		filepath.Join(home, ".npm-global", "bin", name),
+	}
+	for _, p := range candidates {
+		if info, err := os.Stat(p); err == nil && !info.IsDir() {
+			return p
+		}
+	}
+	return ""
+}
+
+// FallbackPATH returns the additional PATH entries that hold user-installed
+// binaries (~/.bun/bin, ~/.cargo/bin, ~/.local/bin). Use this when shelling
+// out to gstack ./setup or other tools that may need bun/cargo on PATH.
+func FallbackPATH() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	parts := []string{
+		filepath.Join(home, ".bun", "bin"),
+		filepath.Join(home, ".cargo", "bin"),
+		filepath.Join(home, ".local", "bin"),
+		filepath.Join(home, ".npm-global", "bin"),
+	}
+	return strings.Join(parts, string(os.PathListSeparator))
 }
 
 // FormatTable renders a status slice as a small text table.
