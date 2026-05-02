@@ -50,9 +50,9 @@ func main() {
 	root.AddCommand(newKintsugiCmd())
 	root.AddCommand(notYet("graphify", "v0.4", graphify.Help))
 	root.AddCommand(notYet("hermes", "v0.5", hermes.Help))
-	root.AddCommand(notYet("handoff", "v0.3", kintsugi.HelpHandoff))
-	root.AddCommand(notYet("resume", "v0.3", kintsugi.HelpResume))
-	root.AddCommand(notYet("sessions", "v0.3", kintsugi.HelpSessions))
+	root.AddCommand(newHandoffCmd())
+	root.AddCommand(newResumeCmd())
+	root.AddCommand(newSessionsCmd())
 	root.AddCommand(notYet("link", "v0.6", state.HelpLink))
 
 	if err := root.Execute(); err != nil {
@@ -346,6 +346,138 @@ func newMempalaceCmd() *cobra.Command {
 		cmd.AddCommand(sub)
 	}
 
+	return cmd
+}
+
+func newHandoffCmd() *cobra.Command {
+	var note string
+	var includeMemo, dryRun bool
+	cmd := &cobra.Command{
+		Use:   "handoff",
+		Short: "Checkpoint the active Claude Code session to the kintsugi relay (resume on another machine)",
+		RunE: func(c *cobra.Command, args []string) error {
+			ctx := context.Background()
+			code, err := kintsugi.Handoff(ctx, kintsugi.HandoffOptions{
+				Note:        note,
+				IncludeMemo: includeMemo,
+				DryRun:      dryRun,
+			})
+			if err != nil {
+				return err
+			}
+			fmt.Printf("\n✓ handoff complete\n  resume code: %s\n", code)
+			fmt.Println("\nOn the target machine:")
+			fmt.Println("  yashigatakae resume                # picks latest")
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&note, "note", "", "Optional note saved with the checkpoint")
+	cmd.Flags().BoolVar(&includeMemo, "memory", true, "Pack the project memory dir alongside the transcript (default true)")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Pack + encrypt + print size; do NOT upload")
+	return cmd
+}
+
+func newResumeCmd() *cobra.Command {
+	var sid, targetCWD string
+	var dryRun, auto bool
+	cmd := &cobra.Command{
+		Use:   "resume [session-id]",
+		Short: "Pull the latest kintsugi checkpoint and restore it to this machine",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(c *cobra.Command, args []string) error {
+			if len(args) == 1 {
+				sid = args[0]
+			}
+			ctx := context.Background()
+			rep, err := kintsugi.Resume(ctx, kintsugi.ResumeOptions{
+				SessionID: sid,
+				TargetCWD: targetCWD,
+				DryRun:    dryRun,
+				Auto:      auto,
+			})
+			if err != nil {
+				return err
+			}
+			fmt.Printf("\n✓ resumed session %s\n", rep.Manifest.SessionID)
+			fmt.Printf("  source:     %s on %s\n", rep.Manifest.SourceCWD, rep.Manifest.SourceMachine)
+			fmt.Printf("  transcript: %s\n", rep.TranscriptPath)
+			if rep.MemoryRestored {
+				fmt.Printf("  memory:     restored\n")
+			}
+			fmt.Printf("\nContinue the conversation:\n  claude --continue %s\n", rep.Manifest.SessionID)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&targetCWD, "cwd", "", "Override target working directory (default = source CWD from manifest)")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show what would be restored, don't write files")
+	cmd.Flags().BoolVar(&auto, "auto", false, "After restore, also exec `claude --continue <id>`")
+	return cmd
+}
+
+func newSessionsCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "sessions",
+		Short: "List / inspect synced sessions on the kintsugi relay",
+	}
+	cmd.AddCommand(&cobra.Command{
+		Use:   "ls",
+		Short: "List all session IDs available on the relay",
+		RunE: func(c *cobra.Command, args []string) error {
+			ctx := context.Background()
+			cfg, err := kintsugi.ResolveEnvForCLI()
+			if err != nil {
+				return err
+			}
+			cl := kintsugi.NewClient(cfg.RelayBase, cfg.APIKey)
+			sids, err := cl.ListSessions(ctx)
+			if err != nil {
+				return err
+			}
+			if len(sids) == 0 {
+				fmt.Println("(no sessions)")
+				return nil
+			}
+			for _, s := range sids {
+				cps, _ := cl.ListCheckpoints(ctx, s)
+				latest := ""
+				if len(cps) > 0 {
+					latest = cps[len(cps)-1].TS
+				}
+				fmt.Printf("  %s  %d checkpoint(s)  latest=%s\n", s, len(cps), latest)
+			}
+			return nil
+		},
+	})
+	cmd.AddCommand(&cobra.Command{
+		Use:   "checkpoints <session-id>",
+		Short: "List checkpoints for a session",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(c *cobra.Command, args []string) error {
+			ctx := context.Background()
+			cfg, err := kintsugi.ResolveEnvForCLI()
+			if err != nil {
+				return err
+			}
+			cl := kintsugi.NewClient(cfg.RelayBase, cfg.APIKey)
+			cps, err := cl.ListCheckpoints(ctx, args[0])
+			if err != nil {
+				return err
+			}
+			for _, cp := range cps {
+				fmt.Printf("  %s  machine=%s  size=%d\n", cp.TS, cp.Machine, cp.Size)
+			}
+			return nil
+		},
+	})
+	cmd.AddCommand(&cobra.Command{
+		Use:   "abandon <session-id>",
+		Short: "Delete a session and all its checkpoints from the relay",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(c *cobra.Command, args []string) error {
+			fmt.Printf("(not yet — direct delete via curl: curl -X DELETE -H \"Authorization: Bearer $BIFROST_API_KEY\" $KINTSUGI_URL/sessions/%s)\n", args[0])
+			return nil
+		},
+	})
 	return cmd
 }
 
