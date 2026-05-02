@@ -103,9 +103,14 @@ func Serve(ctx context.Context, cfg Config) error {
 			return res, nil, nil
 		})
 	}
-	fmt.Printf("  bifrost: %d tools registered across %d downstream(s)\n", len(routes.tools), len(cfg.Downstreams))
+	builtins := registerBuiltins(server)
+	fmt.Printf("  bifrost: %d proxied tools across %d downstream(s) + %d builtin(s)\n",
+		len(routes.tools), len(cfg.Downstreams), len(builtins))
 	for _, t := range routes.tools {
 		fmt.Printf("    %s/%s\n", t.DownstreamName, t.Tool.Name)
+	}
+	for _, name := range builtins {
+		fmt.Printf("    builtin/%s\n", name)
 	}
 
 	// HTTP wiring (in-to-out order: ratelimit → audit → auth → MCP).

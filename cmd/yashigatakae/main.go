@@ -797,7 +797,9 @@ func newHermesCmd() *cobra.Command {
 	}
 
 	{
-		var project, cwd, prompt, note string
+		var project, cwd, prompt, note, idemKey string
+		var priority, maxRetries int
+		var dependsOn int64
 		sub := &cobra.Command{
 			Use:   "enqueue",
 			Short: "Add a Claude task to the queue",
@@ -805,16 +807,24 @@ func newHermesCmd() *cobra.Command {
 				if prompt == "" && len(args) > 0 {
 					prompt = joinArgs(args)
 				}
-				id, err := hermes.Enqueue(context.Background(), hermes.Task{
-					Project: project,
-					CWD:     cwd,
-					Prompt:  prompt,
-					Note:    note,
+				id, hit, err := hermes.Enqueue(context.Background(), hermes.Task{
+					Project:        project,
+					CWD:            cwd,
+					Prompt:         prompt,
+					Note:           note,
+					Priority:       priority,
+					MaxRetries:     maxRetries,
+					IdempotencyKey: idemKey,
+					DependencyID:   dependsOn,
 				})
 				if err != nil {
 					return err
 				}
-				fmt.Printf("✓ enqueued #%d project=%s\n", id, project)
+				if hit {
+					fmt.Printf("· dedupe hit on idempotency-key %q → existing task #%d\n", idemKey, id)
+				} else {
+					fmt.Printf("✓ enqueued #%d project=%s priority=%d\n", id, project, priority)
+				}
 				return nil
 			},
 		}
@@ -822,7 +832,138 @@ func newHermesCmd() *cobra.Command {
 		sub.Flags().StringVar(&cwd, "cwd", "", "Working dir for `claude -p`")
 		sub.Flags().StringVar(&prompt, "prompt", "", "Prompt text (or pass as positional args)")
 		sub.Flags().StringVar(&note, "note", "", "Free-text note saved on the task row")
+		sub.Flags().StringVar(&idemKey, "idempotency-key", "", "Dedupe key — same key within 7d returns the existing task id")
+		sub.Flags().IntVar(&priority, "priority", 5, "Higher number = picked first (1..10)")
+		sub.Flags().IntVar(&maxRetries, "max-retries", 5, "Attempt cap before the task lands in the DLQ")
+		sub.Flags().Int64Var(&dependsOn, "depends-on", 0, "Task id that must reach status=done before this one is eligible")
 		cmd.AddCommand(sub)
+	}
+
+	{
+		dlq := &cobra.Command{
+			Use:   "dlq",
+			Short: "Inspect tasks that exhausted retries",
+		}
+		dlq.AddCommand(&cobra.Command{
+			Use:   "ls",
+			Short: "List dead-lettered tasks",
+			RunE: func(c *cobra.Command, args []string) error {
+				tasks, err := hermes.List(context.Background(), "dlq", 100)
+				if err != nil {
+					return err
+				}
+				if len(tasks) == 0 {
+					fmt.Println("(no DLQ tasks)")
+					return nil
+				}
+				for _, t := range tasks {
+					reason := t.DLQReason
+					if len(reason) > 60 {
+						reason = reason[:60] + "…"
+					}
+					fmt.Printf("  #%-5d  attempts=%d/%d  project=%-12s  %s\n", t.ID, t.RetryCount, t.MaxRetries, t.Project, reason)
+				}
+				return nil
+			},
+		})
+		dlq.AddCommand(&cobra.Command{
+			Use:   "retry <id>",
+			Short: "Reset retry_count and put a DLQ task back on pending",
+			Args:  cobra.ExactArgs(1),
+			RunE: func(c *cobra.Command, args []string) error {
+				id, err := strconv.ParseInt(args[0], 10, 64)
+				if err != nil {
+					return err
+				}
+				if err := hermes.RetryDLQ(context.Background(), id); err != nil {
+					return err
+				}
+				fmt.Printf("✓ task #%d requeued from DLQ\n", id)
+				return nil
+			},
+		})
+		cmd.AddCommand(dlq)
+	}
+
+	{
+		sched := &cobra.Command{
+			Use:   "schedule",
+			Short: "Manage cron-style recurring tasks",
+		}
+		{
+			var project, prompt, cwd, note string
+			var priority, maxRetries int
+			add := &cobra.Command{
+				Use:   "add <cron>",
+				Short: "Add a cron schedule. Cron is 5 fields: m h dom mon dow",
+				Args:  cobra.ExactArgs(1),
+				RunE: func(c *cobra.Command, args []string) error {
+					if _, err := hermes.ParseCron(args[0]); err != nil {
+						return err
+					}
+					id, err := hermes.AddSchedule(context.Background(), hermes.Schedule{
+						Cron:       args[0],
+						Project:    project,
+						Prompt:     prompt,
+						CWD:        cwd,
+						Note:       note,
+						Priority:   priority,
+						MaxRetries: maxRetries,
+					})
+					if err != nil {
+						return err
+					}
+					fmt.Printf("✓ schedule #%d created (%s)\n", id, args[0])
+					return nil
+				},
+			}
+			add.Flags().StringVar(&project, "project", "", "Project label (required)")
+			add.Flags().StringVar(&prompt, "prompt", "", "Prompt text (required)")
+			add.Flags().StringVar(&cwd, "cwd", "", "Working dir")
+			add.Flags().StringVar(&note, "note", "", "Free-text note")
+			add.Flags().IntVar(&priority, "priority", 5, "Priority for fired tasks")
+			add.Flags().IntVar(&maxRetries, "max-retries", 5, "Retry cap on fired tasks")
+			sched.AddCommand(add)
+		}
+		sched.AddCommand(&cobra.Command{
+			Use:   "ls",
+			Short: "List active schedules",
+			RunE: func(c *cobra.Command, args []string) error {
+				scs, err := hermes.ListSchedules(context.Background())
+				if err != nil {
+					return err
+				}
+				if len(scs) == 0 {
+					fmt.Println("(no schedules)")
+					return nil
+				}
+				for _, sc := range scs {
+					last := "(never)"
+					if !sc.LastFiredAt.IsZero() {
+						last = sc.LastFiredAt.Format(time.RFC3339)
+					}
+					fmt.Printf("  #%-3d  %-15s  project=%-12s  last=%s\n", sc.ID, sc.Cron, sc.Project, last)
+				}
+				return nil
+			},
+		})
+		sched.AddCommand(&cobra.Command{
+			Use:   "rm <id>",
+			Short: "Delete a schedule",
+			Args:  cobra.ExactArgs(1),
+			RunE: func(c *cobra.Command, args []string) error {
+				id, err := strconv.ParseInt(args[0], 10, 64)
+				if err != nil {
+					return err
+				}
+				if err := hermes.DeleteSchedule(context.Background(), id); err != nil {
+					return err
+				}
+				fmt.Printf("✓ schedule #%d deleted\n", id)
+				return nil
+			},
+		})
+		cmd.AddCommand(sched)
 	}
 
 	{
@@ -850,7 +991,7 @@ func newHermesCmd() *cobra.Command {
 				return nil
 			},
 		}
-		sub.Flags().StringVar(&status, "status", "", "Filter: pending|running|done|failed|cancelled")
+		sub.Flags().StringVar(&status, "status", "", "Filter: pending|running|done|failed|cancelled|dlq|scheduled")
 		sub.Flags().IntVar(&limit, "limit", 50, "Max rows")
 		cmd.AddCommand(sub)
 	}
@@ -891,8 +1032,9 @@ func newHermesCmd() *cobra.Command {
 	})
 
 	{
-		var poll, claudeBin string
+		var poll, claudeBin, baseBackoff, maxBackoff string
 		var noLessons bool
+		var concurrency int
 		sub := &cobra.Command{
 			Use:   "serve",
 			Short: "Run the worker loop (foreground; systemd unit on VPS)",
@@ -903,16 +1045,30 @@ func newHermesCmd() *cobra.Command {
 				if err != nil {
 					return fmt.Errorf("invalid --poll: %w", err)
 				}
+				bb, err := time.ParseDuration(baseBackoff)
+				if err != nil {
+					return fmt.Errorf("invalid --base-backoff: %w", err)
+				}
+				mb, err := time.ParseDuration(maxBackoff)
+				if err != nil {
+					return fmt.Errorf("invalid --max-backoff: %w", err)
+				}
 				return hermes.Serve(ctx, hermes.WorkerOptions{
 					PollInterval: d,
 					ClaudeBin:    claudeBin,
 					WriteLessons: !noLessons,
+					Concurrency:  concurrency,
+					BaseBackoff:  bb,
+					MaxBackoff:   mb,
 				})
 			},
 		}
 		sub.Flags().StringVar(&poll, "poll", "5s", "How often to check for new tasks")
 		sub.Flags().StringVar(&claudeBin, "claude", "claude", "Path to the claude binary")
 		sub.Flags().BoolVar(&noLessons, "no-lessons", false, "Skip writing the final output as a mempalace lesson")
+		sub.Flags().IntVar(&concurrency, "concurrency", 1, "How many parallel claude subprocesses (sqlite WAL handles modest contention; >4 not recommended)")
+		sub.Flags().StringVar(&baseBackoff, "base-backoff", "30s", "First retry delay; subsequent retries multiply by 10× (capped by --max-backoff)")
+		sub.Flags().StringVar(&maxBackoff, "max-backoff", "8h", "Cap on retry delay")
 		cmd.AddCommand(sub)
 	}
 
