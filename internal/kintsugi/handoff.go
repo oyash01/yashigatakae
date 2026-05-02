@@ -16,13 +16,14 @@ import (
 
 // HandoffOptions captures all CLI flags for `yashigatakae handoff`.
 type HandoffOptions struct {
-	Note         string
-	BaseURL      string // override BIFROST_URL → kintsugi base
-	APIKey       string // override BIFROST_API_KEY
-	KintsugiKey  string // override KINTSUGI_KEY (encryption pass)
-	SessionID    string // override auto-detected session
-	IncludeMemo  bool   // also pack ~/.claude/projects/<encoded-cwd>/memory
-	DryRun       bool   // pack + encrypt + print size, do NOT upload
+	Note            string
+	BaseURL         string // override BIFROST_URL → kintsugi base
+	APIKey          string // override BIFROST_API_KEY
+	KintsugiKey     string // override KINTSUGI_KEY (encryption pass)
+	SessionID       string // override auto-detected session
+	IncludeMemo     bool   // also pack ~/.claude/projects/<encoded-cwd>/memory + MEMORY.md + subagents + todos
+	IncludeWorktree bool   // also pack git diff + untracked files (default true)
+	DryRun          bool   // pack + encrypt + print size, do NOT upload
 }
 
 // Handoff executes the v0.3.0-rc2 handoff flow:
@@ -49,11 +50,34 @@ func Handoff(ctx context.Context, opts HandoffOptions) (string, error) {
 		TranscriptFile: transcript,
 		SourceCWD:      sourceCWD,
 		Note:           opts.Note,
+		SourceKind:     "active",
 	}
 	if opts.IncludeMemo {
 		mem := projectMemoryDir(sourceCWD)
 		if _, err := os.Stat(mem); err == nil {
 			pack.MemoryDir = mem
+		}
+		// Project MEMORY.md sits next to memory/ inside the encoded-cwd dir.
+		meta := filepath.Join(filepath.Dir(mem), "MEMORY.md")
+		if _, err := os.Stat(meta); err == nil {
+			pack.MetaMemoryFile = meta
+		}
+		// Subagents + todos for this session
+		pack.SubagentFiles = collectSubagents(sid, sourceCWD)
+		pack.TodoFiles = collectTodos(sid)
+	}
+
+	// Worktree (uncommitted changes in cwd) — opt-in via --worktree (default true).
+	if opts.IncludeWorktree {
+		wt, wErr := CaptureWorktree(sourceCWD, nil)
+		if wErr != nil {
+			fmt.Printf("  ! worktree capture failed: %v (continuing without)\n", wErr)
+		} else if wt != nil {
+			pack.WorktreeDiff = wt.Diff
+			pack.WorktreeUntracked = wt.UntrackedTar
+			pack.WorktreeBranch = wt.Branch
+			pack.WorktreeHeadSHA = wt.HeadSHA
+			pack.WorktreeExcluded = wt.ExcludedRules
 		}
 	}
 
@@ -69,6 +93,10 @@ func Handoff(ctx context.Context, opts HandoffOptions) (string, error) {
 
 	fmt.Printf("  session: %s\n", sid)
 	fmt.Printf("  source:  %s on %s\n", sourceCWD, mf.SourceMachine)
+	if mf.HasWorktree {
+		fmt.Printf("  worktree: branch=%s head=%s diff=%d untracked-tar=%d\n",
+			mf.WorktreeBranch, shortSHA(mf.WorktreeHeadSHA), len(pack.WorktreeDiff), len(pack.WorktreeUntracked))
+	}
 	fmt.Printf("  size:    %d bytes (encrypted)\n", len(cipher))
 
 	if opts.DryRun {
@@ -142,6 +170,51 @@ func detectSession(override string) (sid, cwd, transcript string, err error) {
 func encodeCWD(cwd string) string {
 	r := strings.NewReplacer("/", "-", "\\", "-", ":", "-")
 	return r.Replace(cwd)
+}
+
+// collectSubagents returns the absolute paths of every subagent .jsonl that
+// belongs to a session. Layout: ~/.claude/projects/<encoded-cwd>/<sid>/subagents/agent-*.jsonl
+func collectSubagents(sid, cwd string) []string {
+	claude, _ := osdetect.ClaudeDir()
+	dir := filepath.Join(claude, "projects", encodeCWD(cwd), sid, "subagents")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+			continue
+		}
+		out = append(out, filepath.Join(dir, e.Name()))
+	}
+	return out
+}
+
+// collectTodos returns the absolute paths of every todo file matching this
+// session. Layout: ~/.claude/todos/<sid>-agent-<anything>.json
+func collectTodos(sid string) []string {
+	claude, _ := osdetect.ClaudeDir()
+	dir := filepath.Join(claude, "todos")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasPrefix(e.Name(), sid) || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		out = append(out, filepath.Join(dir, e.Name()))
+	}
+	return out
+}
+
+func shortSHA(s string) string {
+	if len(s) > 8 {
+		return s[:8]
+	}
+	return s
 }
 
 func projectMemoryDir(cwd string) string {

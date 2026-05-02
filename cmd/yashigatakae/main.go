@@ -527,16 +527,17 @@ func newGraphifyCmd() *cobra.Command {
 
 func newHandoffCmd() *cobra.Command {
 	var note string
-	var includeMemo, dryRun bool
+	var includeMemo, includeWorktree, dryRun bool
 	cmd := &cobra.Command{
 		Use:   "handoff",
 		Short: "Checkpoint the active Claude Code session to the kintsugi relay (resume on another machine)",
 		RunE: func(c *cobra.Command, args []string) error {
 			ctx := context.Background()
 			code, err := kintsugi.Handoff(ctx, kintsugi.HandoffOptions{
-				Note:        note,
-				IncludeMemo: includeMemo,
-				DryRun:      dryRun,
+				Note:            note,
+				IncludeMemo:     includeMemo,
+				IncludeWorktree: includeWorktree,
+				DryRun:          dryRun,
 			})
 			if err != nil {
 				return err
@@ -548,7 +549,8 @@ func newHandoffCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&note, "note", "", "Optional note saved with the checkpoint")
-	cmd.Flags().BoolVar(&includeMemo, "memory", true, "Pack the project memory dir alongside the transcript (default true)")
+	cmd.Flags().BoolVar(&includeMemo, "memory", true, "Pack memory dir + MEMORY.md + subagents + todos (default true)")
+	cmd.Flags().BoolVar(&includeWorktree, "worktree", true, "Pack git diff + untracked files for the active cwd (default true)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Pack + encrypt + print size; do NOT upload")
 	return cmd
 }

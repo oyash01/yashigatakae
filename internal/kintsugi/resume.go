@@ -29,6 +29,8 @@ type ResumeReport struct {
 	TranscriptPath  string
 	MemoryRestored  bool
 	BytesDownloaded int64
+	Worktree        RestoreReport
+	WorktreeError   string
 }
 
 // Resume runs the v0.3.0-rc2 resume flow:
@@ -117,7 +119,47 @@ func Resume(ctx context.Context, opts ResumeOptions) (ResumeReport, error) {
 			}
 			report.MemoryRestored = true
 		}
+		// MEMORY.md sits next to memory/, not inside it.
+		metaSrc := filepath.Join(scratch, "MEMORY.md")
+		if _, err := os.Stat(metaSrc); err == nil {
+			_ = copyOver(metaSrc, filepath.Join(projectDir, "MEMORY.md"))
+		}
+		// Subagents → projects/<encoded>/<sid>/subagents/
+		subSrc := filepath.Join(scratch, "subagents")
+		if _, err := os.Stat(subSrc); err == nil {
+			subDst := filepath.Join(projectDir, mf.SessionID, "subagents")
+			_ = mergeTree(subSrc, subDst)
+		}
+		// Todos → ~/.claude/todos/
+		todoSrc := filepath.Join(scratch, "todos")
+		if _, err := os.Stat(todoSrc); err == nil {
+			todoDst := filepath.Join(claude, "todos")
+			_ = mergeTree(todoSrc, todoDst)
+		}
 	}
+
+	// Worktree restore — only attempted if the manifest carried diff/untracked AND
+	// the target cwd is a git repo.
+	if mf.HasWorktree {
+		wt := &WorktreeCapture{
+			Branch:        mf.WorktreeBranch,
+			HeadSHA:       mf.WorktreeHeadSHA,
+			ExcludedRules: mf.WorktreeExcluded,
+		}
+		if b, err := os.ReadFile(filepath.Join(scratch, worktreeDiffName)); err == nil {
+			wt.Diff = b
+		}
+		if b, err := os.ReadFile(filepath.Join(scratch, worktreeUntrackedName)); err == nil {
+			wt.UntrackedTar = b
+		}
+		wtRep, err := RestoreWorktree(targetCWD, wt)
+		if err != nil {
+			report.WorktreeError = err.Error()
+		} else {
+			report.Worktree = wtRep
+		}
+	}
+
 	return report, nil
 }
 

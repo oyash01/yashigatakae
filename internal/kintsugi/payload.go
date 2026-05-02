@@ -26,12 +26,28 @@ type Manifest struct {
 	SourceCWD     string    `json:"source_cwd"`      // /Users/rohitkumar/Desktop/ghostnode
 	CreatedAt     time.Time `json:"created_at"`
 	Note          string    `json:"note,omitempty"`
-	HasWorktree   bool      `json:"has_worktree"`
-	HasMemory     bool      `json:"has_memory"`
+
+	// Worktree metadata — set when WorktreeDiff/WorktreeUntracked are packed.
+	// HasWorktree mirrors WorktreeDiff != nil for the read-side.
+	HasWorktree     bool   `json:"has_worktree"`
+	WorktreeBranch  string `json:"worktree_branch,omitempty"`
+	WorktreeHeadSHA string `json:"worktree_head_sha,omitempty"`
+	WorktreeExcluded []string `json:"worktree_excluded,omitempty"` // glob patterns honored at pack time
+
+	HasMemory bool `json:"has_memory"`
+
+	// SourceKind distinguishes a live handoff (active session being checkpointed
+	// from an open Claude Code) from an archive backfill (past session swept off
+	// disk by `yashigatakae backfill`). Lets resume + sessions ls render badges.
+	SourceKind string `json:"source_kind,omitempty"` // "active" | "archive"
 }
 
-const manifestName = "manifest.json"
-const sessionTranscriptName = "session.jsonl"
+const (
+	manifestName            = "manifest.json"
+	sessionTranscriptName   = "session.jsonl"
+	worktreeDiffName        = "worktree.diff"
+	worktreeUntrackedName   = "worktree-untracked.tar"
+)
 
 // PackOptions captures what to include in a handoff bundle.
 type PackOptions struct {
@@ -40,7 +56,26 @@ type PackOptions struct {
 	SourceCWD      string
 	Note           string
 	MemoryDir      string // optional; ~/.claude/projects/<encoded-cwd>/memory
-	WorktreeDir    string // optional; the active project's working tree (uncommitted changes only — handled separately)
+	SourceKind     string // optional; "active" (default) or "archive"
+
+	// Worktree payload — typically built by kintsugi.CaptureWorktree(SourceCWD).
+	// If WorktreeDiff is non-nil, Pack stores it as worktree.diff inside the
+	// tarball and sets HasWorktree on the manifest.
+	WorktreeDiff      []byte
+	WorktreeUntracked []byte // raw .tar bytes (no gzip; we're already inside one)
+	WorktreeBranch    string
+	WorktreeHeadSHA   string
+	WorktreeExcluded  []string
+
+	// Subagents transcripts to ship alongside the main transcript. Each entry is
+	// the absolute path to a subagent .jsonl. Stored under subagents/ in the tarball.
+	SubagentFiles []string
+
+	// Todos JSON to ship verbatim. Each entry: absolute path. Stored under todos/.
+	TodoFiles []string
+
+	// MetaMemoryFile is the project MEMORY.md (one file). Stored as MEMORY.md.
+	MetaMemoryFile string
 }
 
 // Pack builds an in-memory tarball from PackOptions and returns the raw bytes
@@ -54,15 +89,23 @@ func Pack(o PackOptions) ([]byte, Manifest, error) {
 	}
 
 	host, _ := os.Hostname()
+	kind := o.SourceKind
+	if kind == "" {
+		kind = "active"
+	}
 	mf := Manifest{
-		Version:       "kintsugi-1",
-		SessionID:     o.SessionID,
-		SourceMachine: host,
-		SourceCWD:     o.SourceCWD,
-		CreatedAt:     time.Now().UTC(),
-		Note:          o.Note,
-		HasMemory:     o.MemoryDir != "",
-		HasWorktree:   o.WorktreeDir != "",
+		Version:          "kintsugi-1",
+		SessionID:        o.SessionID,
+		SourceMachine:    host,
+		SourceCWD:        o.SourceCWD,
+		CreatedAt:        time.Now().UTC(),
+		Note:             o.Note,
+		HasMemory:        o.MemoryDir != "",
+		HasWorktree:      o.WorktreeDiff != nil || o.WorktreeUntracked != nil,
+		WorktreeBranch:   o.WorktreeBranch,
+		WorktreeHeadSHA:  o.WorktreeHeadSHA,
+		WorktreeExcluded: o.WorktreeExcluded,
+		SourceKind:       kind,
 	}
 
 	var buf bytes.Buffer
@@ -95,9 +138,48 @@ func Pack(o PackOptions) ([]byte, Manifest, error) {
 		}
 	}
 
-	// 4. worktree (uncommitted changes only — handled by caller via Worktree() below)
-	// (The caller hands us a pre-built tar fragment if they want worktree. v0.3.0-rc2
-	// keeps worktree out of scope; rc3 brings it back via the watcher path.)
+	// 4. project MEMORY.md (single file)
+	if o.MetaMemoryFile != "" {
+		if _, err := os.Stat(o.MetaMemoryFile); err == nil {
+			if err := addFile(tw, "MEMORY.md", o.MetaMemoryFile); err != nil {
+				return nil, mf, fmt.Errorf("MEMORY.md: %w", err)
+			}
+		}
+	}
+
+	// 5. subagent transcripts
+	for _, p := range o.SubagentFiles {
+		if _, err := os.Stat(p); err != nil {
+			continue
+		}
+		dst := "subagents/" + filepath.Base(p)
+		if err := addFile(tw, dst, p); err != nil {
+			return nil, mf, fmt.Errorf("subagent %s: %w", p, err)
+		}
+	}
+
+	// 6. todos
+	for _, p := range o.TodoFiles {
+		if _, err := os.Stat(p); err != nil {
+			continue
+		}
+		dst := "todos/" + filepath.Base(p)
+		if err := addFile(tw, dst, p); err != nil {
+			return nil, mf, fmt.Errorf("todo %s: %w", p, err)
+		}
+	}
+
+	// 7. worktree diff (binary patch from HEAD) and untracked-files tarball
+	if o.WorktreeDiff != nil {
+		if err := writeRaw(tw, worktreeDiffName, o.WorktreeDiff, mf.CreatedAt); err != nil {
+			return nil, mf, fmt.Errorf("worktree diff: %w", err)
+		}
+	}
+	if o.WorktreeUntracked != nil {
+		if err := writeRaw(tw, worktreeUntrackedName, o.WorktreeUntracked, mf.CreatedAt); err != nil {
+			return nil, mf, fmt.Errorf("worktree untracked: %w", err)
+		}
+	}
 
 	if err := tw.Close(); err != nil {
 		return nil, mf, err
@@ -106,6 +188,22 @@ func Pack(o PackOptions) ([]byte, Manifest, error) {
 		return nil, mf, err
 	}
 	return buf.Bytes(), mf, nil
+}
+
+// writeRaw writes an in-memory blob into the tarball under dstName. Used for
+// worktree.diff and worktree-untracked.tar which are computed in memory rather
+// than read from disk.
+func writeRaw(tw *tar.Writer, dstName string, body []byte, ts time.Time) error {
+	if err := tw.WriteHeader(&tar.Header{
+		Name:    dstName,
+		Mode:    0o644,
+		Size:    int64(len(body)),
+		ModTime: ts,
+	}); err != nil {
+		return err
+	}
+	_, err := tw.Write(body)
+	return err
 }
 
 func addFile(tw *tar.Writer, dstName, srcPath string) error {
