@@ -16,6 +16,7 @@ import (
 	"github.com/oyash01/yashigatakae/internal/doctor"
 	"github.com/oyash01/yashigatakae/internal/graphify"
 	"github.com/oyash01/yashigatakae/internal/hermes"
+	yashihooks "github.com/oyash01/yashigatakae/internal/hooks"
 	"github.com/oyash01/yashigatakae/internal/kintsugi"
 	"github.com/oyash01/yashigatakae/internal/mempalace"
 	"github.com/oyash01/yashigatakae/internal/secrets"
@@ -45,6 +46,7 @@ func main() {
 	root.AddCommand(newUpgradeCmd())
 	root.AddCommand(newMempalaceCmd())
 	root.AddCommand(newBifrostCmd())
+	root.AddCommand(newHooksCmd())
 	root.AddCommand(notYet("graphify", "v0.4", graphify.Help))
 	root.AddCommand(notYet("hermes", "v0.5", hermes.Help))
 	root.AddCommand(notYet("handoff", "v0.3", kintsugi.HelpHandoff))
@@ -343,6 +345,30 @@ func newMempalaceCmd() *cobra.Command {
 		cmd.AddCommand(sub)
 	}
 
+	return cmd
+}
+
+func newHooksCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "hooks",
+		Short: "Hook entrypoints invoked by Claude Code (sweep, autocommit)",
+	}
+	cmd.AddCommand(&cobra.Command{
+		Use:   "sweep",
+		Short: "SessionEnd: parse the just-finished transcript and remember each user/assistant pair",
+		RunE: func(c *cobra.Command, args []string) error {
+			yashihooks.RunSweepCmd()
+			return nil
+		},
+	})
+	cmd.AddCommand(&cobra.Command{
+		Use:   "autocommit",
+		Short: "PostToolUse: rsync ~/.claude into state-repo working copy and auto-commit",
+		RunE: func(c *cobra.Command, args []string) error {
+			yashihooks.RunAutocommit()
+			return nil
+		},
+	})
 	return cmd
 }
 

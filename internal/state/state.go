@@ -349,19 +349,25 @@ func copyFile(src, dst string) error {
 	return err
 }
 
-func defaultHookSpecs(claudeDir string, os osdetect.OS) []HookSpec {
+func defaultHookSpecs(claudeDir string, _ osdetect.OS) []HookSpec {
 	hooksDir := filepath.Join(claudeDir, "hooks")
 	prefix := func(name string) string {
 		return filepath.Join(hooksDir, name)
+	}
+	// Use the running yashigatakae binary's absolute path for PostToolUse +
+	// SessionEnd hooks, so they work even if the binary isn't on Claude
+	// Code's PATH at runtime. Caveman hooks remain Node-script based for now
+	// (real reimplementation in Go is a v0.7 polish).
+	yashi, err := os.Executable()
+	if err != nil || yashi == "" {
+		yashi = "yashigatakae" // fallback to PATH lookup
 	}
 	type spec = HookSpec
 	return []spec{
 		{Event: "SessionStart", Type: "command", Cmd: "node " + quote(prefix("caveman-activate.js"))},
 		{Event: "UserPromptSubmit", Type: "command", Cmd: "node " + quote(prefix("caveman-mode-tracker.js"))},
-		// PostToolUse auto-commit on changes to ~/.claude/skills/** and ~/.claude/CLAUDE.md
-		{Event: "PostToolUse", Matcher: "Edit|Write", Type: "command", Cmd: "bash " + quote(prefix("yashigatakae-autocommit.sh"))},
-		// SessionEnd memory sweep stub (real impl in v0.2)
-		{Event: "SessionEnd", Type: "command", Cmd: "bash " + quote(prefix("yashigatakae-sweep.sh"))},
+		{Event: "PostToolUse", Matcher: "Edit|Write", Type: "command", Cmd: quote(yashi) + " hooks autocommit"},
+		{Event: "SessionEnd", Type: "command", Cmd: quote(yashi) + " hooks sweep"},
 	}
 }
 
