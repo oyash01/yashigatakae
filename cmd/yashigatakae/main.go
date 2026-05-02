@@ -21,7 +21,9 @@ import (
 	"github.com/oyash01/yashigatakae/internal/kintsugi"
 	"github.com/oyash01/yashigatakae/internal/mempalace"
 	"github.com/oyash01/yashigatakae/internal/secrets"
+	"github.com/oyash01/yashigatakae/internal/osdetect"
 	"github.com/oyash01/yashigatakae/internal/state"
+	"github.com/oyash01/yashigatakae/internal/tui"
 	"github.com/spf13/cobra"
 )
 
@@ -35,6 +37,13 @@ func main() {
 		Version:       Version,
 		SilenceUsage:  true,
 		SilenceErrors: false,
+		// No-args opens the Bubble Tea root menu. Subcommands bypass this.
+		RunE: func(c *cobra.Command, args []string) error {
+			if len(args) > 0 {
+				return c.Help()
+			}
+			return runInteractive()
+		},
 	}
 
 	root.AddCommand(newInitCmd())
@@ -200,6 +209,90 @@ func newUpgradeCmd() *cobra.Command {
 	cmd.Flags().StringVar(&tag, "tag", "", "Pin a specific version (default: latest)")
 	cmd.Flags().BoolVar(&includeState, "state", true, "Also git-pull the state-repo")
 	return cmd
+}
+
+// runInteractive is what `yashigatakae` (no args) does. Opens the root TUI
+// menu, then dispatches the chosen action by re-running the right subcommand
+// in-process. Avoids importing every subsystem from internal/tui to keep the
+// dependency graph one-way.
+func runInteractive() error {
+	for {
+		action, err := tui.RunAndDispatch()
+		if err != nil {
+			return err
+		}
+		switch action {
+		case "doctor":
+			if err := doctor.Run(); err != nil {
+				return err
+			}
+			fmt.Println()
+		case "status":
+			if err := doctor.Status(); err != nil {
+				return err
+			}
+			fmt.Println()
+		case "backfill":
+			rep, err := kintsugi.Backfill(context.Background(), kintsugi.BackfillOptions{})
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "error:", err)
+			} else {
+				fmt.Printf("✓ scanned=%d uploaded=%d skipped=%d failed=%d\n",
+					rep.Scanned, rep.Uploaded, rep.Skipped, rep.Failed)
+			}
+			fmt.Println()
+		case "sessions":
+			if err := runSessionsBrowser(); err != nil {
+				fmt.Fprintln(os.Stderr, "error:", err)
+			}
+		case "mempalace", "hermes":
+			fmt.Println("(coming in TUI v2 — for now use `yashigatakae", action, "--help`)")
+		case "exit", "":
+			return nil
+		}
+	}
+}
+
+// runSessionsBrowser merges local + relay sessions into one TUI list and
+// dispatches the user's pick (resume / abandon).
+func runSessionsBrowser() error {
+	claudeDir, _ := osdetect.ClaudeDir()
+	rows := tui.LoadLocalSessions(claudeDir)
+
+	// Best-effort relay merge: tolerate missing env / unreachable relay.
+	if cfg, err := kintsugi.ResolveEnvForCLI(); err == nil {
+		client := kintsugi.NewClient(cfg.RelayBase, cfg.APIKey)
+		if sids, err := client.ListSessions(context.Background()); err == nil {
+			seen := map[string]int{}
+			for i, r := range rows {
+				seen[r.SessionID] = i
+			}
+			for _, sid := range sids {
+				if i, ok := seen[sid]; ok {
+					rows[i].OnRelay = true
+				} else {
+					rows = append(rows, tui.SessionRow{SessionID: sid, OnRelay: true})
+				}
+			}
+		}
+	}
+
+	res, err := tui.RunSessionsBrowser(rows)
+	if err != nil || res.Picked == nil {
+		return err
+	}
+	if res.Action == "resume" {
+		fmt.Printf("\nResuming %s ...\n", res.Picked.SessionID)
+		_, err := kintsugi.Resume(context.Background(), kintsugi.ResumeOptions{
+			SessionID: res.Picked.SessionID,
+			TargetCWD: res.Picked.SourceCWD,
+		})
+		if err != nil {
+			return err
+		}
+		fmt.Printf("\nclaude --continue %s\n", res.Picked.SessionID)
+	}
+	return nil
 }
 
 // notYet builds a placeholder cobra command that explains when a subsystem ships.
