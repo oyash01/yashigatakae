@@ -36,6 +36,7 @@ type Options struct {
 	Repo    string
 	Refresh bool
 	OutDir  string // override default ~/.yashigatakae/state/codebase-wiki/<base>
+	Pro     bool   // when true, run the Karpathy-style multi-page wiki generator
 }
 
 // Result is what Run returns.
@@ -46,7 +47,10 @@ type Result struct {
 	GitCommit string
 }
 
-// Run is the v0.4.0-rc1 generator.
+// Run dispatches to the basic (v0.4) or pro (v0.13) generator based on
+// opts.Pro. Default when neither flag is set is pro — the basic generator
+// is mostly kept as a fallback for environments where wiki rendering is
+// not wanted.
 func Run(opts Options) (Result, error) {
 	if opts.Repo == "" {
 		return Result{}, fmt.Errorf("repo path required")
@@ -59,6 +63,9 @@ func Run(opts Options) (Result, error) {
 		return Result{}, fmt.Errorf("repo %s: %w", abs, err)
 	} else if !info.IsDir() {
 		return Result{}, fmt.Errorf("repo %s is not a directory", abs)
+	}
+	if opts.Pro {
+		return GenerateWiki(opts)
 	}
 
 	wikiDir := opts.OutDir

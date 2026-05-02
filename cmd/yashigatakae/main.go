@@ -1135,17 +1135,18 @@ func newHermesCmd() *cobra.Command {
 }
 
 func newGraphifyCmd() *cobra.Command {
-	var refresh bool
+	var refresh, pro bool
 	var outDir string
 	cmd := &cobra.Command{
 		Use:   "graphify <repo>",
-		Short: "Generate a codebase wiki under ~/.yashigatakae/state/codebase-wiki/",
+		Short: "Generate a Karpathy LLM Wiki under ~/.yashigatakae/state/codebase-wiki/",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
 			res, err := graphify.Run(graphify.Options{
 				Repo:    args[0],
 				Refresh: refresh,
 				OutDir:  outDir,
+				Pro:     pro,
 			})
 			if err != nil {
 				return err
@@ -1157,6 +1158,23 @@ func newGraphifyCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&refresh, "refresh", false, "Force regenerate even if recent")
 	cmd.Flags().StringVar(&outDir, "out", "", "Override output dir")
+	cmd.Flags().BoolVar(&pro, "pro", true, "Generate the full Karpathy LLM Wiki taxonomy (modules/, symbols/, DECISIONS, GLOSSARY, STUB-PAGES, _meta/citations.json)")
+	cmd.AddCommand(&cobra.Command{
+		Use:   "check <repo>",
+		Short: "Exit non-zero if STUB-PAGES.md has any unresolved [[wikilinks]]",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(c *cobra.Command, args []string) error {
+			n, err := graphify.CheckWiki(graphify.Options{Repo: args[0], OutDir: outDir})
+			if err != nil {
+				return err
+			}
+			if n > 0 {
+				return fmt.Errorf("%d unresolved wikilinks (see STUB-PAGES.md)", n)
+			}
+			fmt.Println("✓ wiki has no broken wikilinks")
+			return nil
+		},
+	})
 	return cmd
 }
 

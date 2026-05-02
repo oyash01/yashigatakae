@@ -9,11 +9,12 @@ import (
 	"text/template"
 )
 
-// embedded carries the default templates + caveman hooks INSIDE the binary.
-// This decouples the public yashigatakae tool from any user's private state
-// repo: a fresh `init` works without ever touching GitHub for skills/hooks.
+// embedded carries the default templates + caveman hooks + bundled skills
+// INSIDE the binary. This decouples the public yashigatakae tool from any
+// user's private state repo: a fresh `init` works without ever touching
+// GitHub for skills/hooks.
 //
-//go:embed embedded/templates/*.tmpl embedded/templates/*.env embedded/hooks/*
+//go:embed embedded/templates/*.tmpl embedded/templates/*.env embedded/hooks/* embedded/skills/wiki/SKILL.md
 var embedded embed.FS
 
 // extractEmbeddedTemplates renders every embedded *.tmpl file into claudeDir,
@@ -74,6 +75,41 @@ func extractEmbeddedTemplates(claudeDir, home, user string) ([]string, error) {
 		}
 	}
 	return written, nil
+}
+
+// extractEmbeddedSkills copies every directory under embedded/skills/ into
+// claudeDir/skills/<name>/. Existing files are overwritten — the bundled
+// skills are tool-managed. User-authored skills live alongside untouched.
+func extractEmbeddedSkills(claudeDir string) ([]string, error) {
+	skillsDst := filepath.Join(claudeDir, "skills")
+	if err := os.MkdirAll(skillsDst, 0o755); err != nil {
+		return nil, err
+	}
+	var written []string
+	err := fs.WalkDir(embedded, "embedded/skills", func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		raw, err := embedded.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		// Mirror the relative tree under embedded/skills/ into claudeDir/skills/.
+		rel := strings.TrimPrefix(p, "embedded/skills/")
+		dst := filepath.Join(skillsDst, rel)
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(dst, raw, 0o644); err != nil {
+			return err
+		}
+		written = append(written, dst)
+		return nil
+	})
+	return written, err
 }
 
 // extractEmbeddedHooks copies every file in embedded/hooks/ into

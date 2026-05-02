@@ -101,12 +101,17 @@ func Run(opts InitOptions) error {
 	}
 	fmt.Println()
 
-	// 3. extract embedded hooks (caveman + statusline) — always
-	fmt.Println("[3/8] Install embedded caveman hooks")
+	// 3. extract embedded hooks (caveman + statusline) + bundled skills — always
+	fmt.Println("[3/8] Install embedded caveman hooks + bundled skills")
 	if written, err := extractEmbeddedHooks(claudeDir); err != nil {
 		return err
 	} else {
 		fmt.Printf("  · installed %d hook script(s)\n", len(written))
+	}
+	if written, err := extractEmbeddedSkills(claudeDir); err != nil {
+		return err
+	} else {
+		fmt.Printf("  · installed %d skill file(s)\n", len(written))
 	}
 	fmt.Println()
 
