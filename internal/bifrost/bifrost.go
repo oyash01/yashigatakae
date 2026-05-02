@@ -13,7 +13,16 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/oyash01/yashigatakae/internal/audit"
 )
+
+// auditPathOrFallback returns the audit log path for the startup message.
+func auditPathOrFallback() string {
+	if p := audit.Default().Path(); p != "" {
+		return p
+	}
+	return "(stderr fallback)"
+}
 
 // Downstream describes one MCP server to proxy to.
 type Downstream struct {
@@ -91,13 +100,19 @@ func Serve(ctx context.Context, cfg Config) error {
 		fmt.Printf("    %s/%s\n", t.DownstreamName, t.Tool.Name)
 	}
 
-	// HTTP wiring: optional bearer-token gate, /health, /mcp.
+	// HTTP wiring (in-to-out order: ratelimit → audit → auth → MCP).
+	// Health stays cheap + unlogged so monitors don't spam the audit log.
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, "ok")
 	})
 	mcpHandler := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server { return server }, nil)
-	mux.Handle("/mcp", apiKeyGate(cfg.APIKey, mcpHandler))
+	limiter := audit.NewLimiter(audit.DefaultBifrostLimits())
+	// Order: audit (outer, sees every request including 429/401) → ratelimit → auth → MCP.
+	mux.Handle("/mcp",
+		audit.Middleware("bifrost",
+			limiter.HTTPMiddleware(
+				apiKeyGate(cfg.APIKey, mcpHandler))))
 
 	httpServer := &http.Server{
 		Addr:              cfg.Listen,
@@ -107,6 +122,7 @@ func Serve(ctx context.Context, cfg Config) error {
 	errCh := make(chan error, 1)
 	go func() { errCh <- httpServer.ListenAndServe() }()
 	fmt.Printf("bifrost listening on http://%s/mcp (health: /health)\n", cfg.Listen)
+	fmt.Printf("  audit log: %s\n  %s\n", auditPathOrFallback(), limiter.String())
 
 	select {
 	case <-ctx.Done():

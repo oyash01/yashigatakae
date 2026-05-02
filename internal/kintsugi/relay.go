@@ -12,8 +12,16 @@ import (
 	"strings"
 	"time"
 
+	"github.com/oyash01/yashigatakae/internal/audit"
 	"github.com/oyash01/yashigatakae/internal/osdetect"
 )
+
+func auditPathOrFallback() string {
+	if p := audit.Default().Path(); p != "" {
+		return p
+	}
+	return "(stderr fallback)"
+}
 
 // RelayConfig is what `yashigatakae kintsugi serve` reads.
 type RelayConfig struct {
@@ -59,8 +67,27 @@ func ServeRelay(ctx context.Context, cfg RelayConfig) error {
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprintln(w, "ok")
 	})
-	mux.HandleFunc("/kintsugi/admin/diskfree", r.gateAuth(r.handleDiskfree))
-	mux.HandleFunc("/kintsugi/", r.gateAuth(r.handleKintsugi))
+
+	// Per-method limiters: GET cheap (lots of legitimate polling), POST tight
+	// (handoffs are human-paced; bursts of POSTs are abuse).
+	postLim := audit.NewLimiter(audit.DefaultKintsugiPOSTLimits())
+	getLim := audit.NewLimiter(audit.DefaultKintsugiGETLimits())
+	gatedDiskfree := r.gateAuth(r.handleDiskfree)
+	gatedKintsugi := r.gateAuth(r.handleKintsugi)
+
+	// Order: audit (outer) → ratelimit → auth → handler.
+	withMethodLimit := func(h http.HandlerFunc) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			lim := getLim
+			if req.Method == http.MethodPost || req.Method == http.MethodDelete {
+				lim = postLim
+			}
+			lim.HTTPMiddleware(h).ServeHTTP(w, req)
+		})
+	}
+
+	mux.Handle("/kintsugi/admin/diskfree", audit.Middleware("kintsugi", withMethodLimit(gatedDiskfree)))
+	mux.Handle("/kintsugi/", audit.Middleware("kintsugi", withMethodLimit(gatedKintsugi)))
 
 	httpServer := &http.Server{
 		Addr:              cfg.Listen,
@@ -70,6 +97,8 @@ func ServeRelay(ctx context.Context, cfg RelayConfig) error {
 	errCh := make(chan error, 1)
 	go func() { errCh <- httpServer.ListenAndServe() }()
 	fmt.Printf("kintsugi relay listening on http://%s/kintsugi/* (data: %s)\n", cfg.Listen, cfg.DataDir)
+	fmt.Printf("  audit log: %s\n  POST: %s\n  GET:  %s\n",
+		auditPathOrFallback(), postLim.String(), getLim.String())
 
 	select {
 	case <-ctx.Done():
