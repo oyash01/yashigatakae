@@ -163,6 +163,7 @@ StandardError=journal
 `
 
 func writeMempalaceUnit(yashi string) error {
+	home := mustHome()
 	unit := fmt.Sprintf(`[Unit]
 Description=yashigatakae mempalace MCP server (semantic memory)
 After=network-online.target
@@ -170,11 +171,13 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+ExecStartPre=-%s db unlock %s/.yashigatakae/mempalace.db
 ExecStart=%s mempalace serve --addr 127.0.0.1:8765
+ExecStopPost=-%s db lock %s/.yashigatakae/mempalace.db
 `+hardenedServiceBlock+`
 [Install]
 WantedBy=multi-user.target
-`, yashi, mustHome())
+`, yashi, home, yashi, yashi, home, home)
 	return os.WriteFile("/etc/systemd/system/yashigatakae-mempalace.service", []byte(unit), 0o644)
 }
 
@@ -195,6 +198,7 @@ WantedBy=multi-user.target
 }
 
 func writeHermesUnit(yashi string) error {
+	home := mustHome()
 	unit := fmt.Sprintf(`[Unit]
 Description=yashigatakae hermes worker (background self-learning agent)
 After=network-online.target yashigatakae-mempalace.service
@@ -202,11 +206,13 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+ExecStartPre=-%s db unlock %s/.yashigatakae/hermes.db
 ExecStart=%s hermes serve --poll 10s
+ExecStopPost=-%s db lock %s/.yashigatakae/hermes.db
 `+hardenedServiceBlock+`
 [Install]
 WantedBy=multi-user.target
-`, yashi, mustHome())
+`, yashi, home, yashi, yashi, home, home)
 	return os.WriteFile("/etc/systemd/system/yashigatakae-hermes.service", []byte(unit), 0o644)
 }
 

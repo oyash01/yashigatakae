@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/oyash01/yashigatakae/internal/atrest"
 	"github.com/oyash01/yashigatakae/internal/bifrost"
 	"github.com/oyash01/yashigatakae/internal/caveman"
 	"github.com/oyash01/yashigatakae/internal/doctor"
@@ -79,6 +80,44 @@ func main() {
 			return state.Disable()
 		},
 	})
+
+	{
+		dbCmd := &cobra.Command{
+			Use:   "db",
+			Short: "At-rest encryption for sqlite databases (mempalace.db, hermes.db). Wired into systemd ExecStartPre / ExecStopPost.",
+		}
+		dbCmd.AddCommand(&cobra.Command{
+			Use:   "lock <path>",
+			Short: "Encrypt <path> → <path>.age and remove the plaintext (idempotent)",
+			Args:  cobra.ExactArgs(1),
+			RunE: func(c *cobra.Command, args []string) error {
+				return atrest.Lock(args[0])
+			},
+		})
+		dbCmd.AddCommand(&cobra.Command{
+			Use:   "unlock <path>",
+			Short: "Decrypt <path>.age → <path> and remove the ciphertext (idempotent)",
+			Args:  cobra.ExactArgs(1),
+			RunE: func(c *cobra.Command, args []string) error {
+				return atrest.Unlock(args[0])
+			},
+		})
+		dbCmd.AddCommand(&cobra.Command{
+			Use:   "lock-all",
+			Short: "Lock both ~/.yashigatakae/{mempalace,hermes}.db (typical ExecStopPost)",
+			RunE: func(c *cobra.Command, args []string) error {
+				return atrest.LockAll(defaultDBPaths())
+			},
+		})
+		dbCmd.AddCommand(&cobra.Command{
+			Use:   "unlock-all",
+			Short: "Unlock both ~/.yashigatakae/{mempalace,hermes}.db (typical ExecStartPre)",
+			RunE: func(c *cobra.Command, args []string) error {
+				return atrest.UnlockAll(defaultDBPaths())
+			},
+		})
+		root.AddCommand(dbCmd)
+	}
 
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
@@ -257,6 +296,18 @@ func newUpgradeCmd() *cobra.Command {
 	cmd.Flags().StringVar(&tag, "tag", "", "Pin a specific version (default: latest)")
 	cmd.Flags().BoolVar(&includeState, "state", true, "Also git-pull the state-repo")
 	return cmd
+}
+
+// defaultDBPaths returns the canonical paths for at-rest lock-all / unlock-all.
+func defaultDBPaths() []string {
+	yash, err := osdetect.YashigatakaeDir()
+	if err != nil {
+		return nil
+	}
+	return []string{
+		fmt.Sprintf("%s/mempalace.db", yash),
+		fmt.Sprintf("%s/hermes.db", yash),
+	}
 }
 
 // runInteractive is what `yashigatakae` (no args) does. Opens the root TUI
