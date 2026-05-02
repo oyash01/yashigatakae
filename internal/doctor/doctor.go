@@ -6,7 +6,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -98,10 +100,75 @@ func Run() error {
 	return nil
 }
 
-// Status is a compact per-machine status print used by `yashigatakae status`.
-// v0.1 just calls Run; v0.6 will add cluster + drift info.
+// Status is `yashigatakae status` — runs all doctor checks plus enriched
+// drift information (binary version vs latest release, state-repo HEAD vs
+// origin/main, mempalace counts).
 func Status() error {
-	return Run()
+	if err := Run(); err != nil {
+		return err
+	}
+	fmt.Println()
+	fmt.Println("drift")
+	binCheck()
+	stateCheck()
+	return nil
+}
+
+func binCheck() {
+	tag, err := fetchLatestTag("oyash01/yashigatakae")
+	if err != nil {
+		fmt.Printf("  ! can't reach github.com to check latest release: %v\n", err)
+		return
+	}
+	fmt.Printf("  · binary: latest release on GitHub = %s (run `yashigatakae upgrade` to swap)\n", tag)
+}
+
+func stateCheck() {
+	yash, _ := osdetect.YashigatakaeDir()
+	stateDir := filepath.Join(yash, "state")
+	if _, err := os.Stat(filepath.Join(stateDir, ".git")); err != nil {
+		fmt.Println("  · state-repo: not present (run `yashigatakae init`)")
+		return
+	}
+	// Fetch + compare.
+	if out, err := runCmd(stateDir, "git", "fetch", "--quiet"); err != nil {
+		fmt.Printf("  ! state-repo fetch failed: %s\n", strings.TrimSpace(out))
+		return
+	}
+	local, _ := runCmd(stateDir, "git", "rev-parse", "--short", "HEAD")
+	remote, _ := runCmd(stateDir, "git", "rev-parse", "--short", "origin/main")
+	local = strings.TrimSpace(local)
+	remote = strings.TrimSpace(remote)
+	if local == remote {
+		fmt.Printf("  · state-repo: in sync (%s)\n", local)
+		return
+	}
+	ahead, _ := runCmd(stateDir, "git", "rev-list", "--count", "origin/main..HEAD")
+	behind, _ := runCmd(stateDir, "git", "rev-list", "--count", "HEAD..origin/main")
+	fmt.Printf("  ! state-repo: drift — local=%s origin=%s ahead=%s behind=%s (run `yashigatakae sync`)\n",
+		local, remote, strings.TrimSpace(ahead), strings.TrimSpace(behind))
+}
+
+func fetchLatestTag(repo string) (string, error) {
+	resp, err := http.Get("https://api.github.com/repos/" + repo + "/releases/latest")
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	var rel struct {
+		TagName string `json:"tag_name"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
+		return "", err
+	}
+	return rel.TagName, nil
+}
+
+func runCmd(dir, name string, args ...string) (string, error) {
+	cmd := exec.Command(name, args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	return string(out), err
 }
 
 func dirOK(label, p string) check {

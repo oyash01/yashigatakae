@@ -175,14 +175,30 @@ func newSyncCmd() *cobra.Command {
 }
 
 func newUpgradeCmd() *cobra.Command {
-	return &cobra.Command{
+	var tag string
+	var includeState bool
+	cmd := &cobra.Command{
 		Use:   "upgrade",
-		Short: "Self-update yashigatakae, then upgrade gstack and skills",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			fmt.Println("upgrade: ships in v0.6 — for now, re-run install.sh / install.ps1")
+		Short: "Self-update yashigatakae from the latest GitHub release",
+		RunE: func(c *cobra.Command, args []string) error {
+			res, err := state.Upgrade(state.UpgradeOptions{
+				TargetTag:    tag,
+				IncludeState: includeState,
+			})
+			if err != nil {
+				return err
+			}
+			fmt.Printf("\n✓ upgrade complete: %s → %s\n", res.OldVersion, res.NewVersion)
+			fmt.Printf("  binary: %s\n", res.BinaryPath)
+			if res.StateBumped {
+				fmt.Println("  state-repo: pulled to latest")
+			}
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&tag, "tag", "", "Pin a specific version (default: latest)")
+	cmd.Flags().BoolVar(&includeState, "state", true, "Also git-pull the state-repo")
+	return cmd
 }
 
 // notYet builds a placeholder cobra command that explains when a subsystem ships.
