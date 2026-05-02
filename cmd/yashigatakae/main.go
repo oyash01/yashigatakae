@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/signal"
 	"strconv"
+	"syscall"
 
 	"github.com/oyash01/yashigatakae/internal/bifrost"
 	"github.com/oyash01/yashigatakae/internal/caveman"
@@ -324,6 +326,22 @@ func newMempalaceCmd() *cobra.Command {
 			},
 		}
 		sub.Flags().BoolVar(&asJSON, "json", false, "Output as JSON")
+		cmd.AddCommand(sub)
+	}
+
+	// serve — HTTP MCP server
+	{
+		var addr string
+		sub := &cobra.Command{
+			Use:   "serve",
+			Short: "Run mempalace as an HTTP MCP server (recall / remember / forget / stats tools)",
+			RunE: func(c *cobra.Command, args []string) error {
+				ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+				defer stop()
+				return mempalace.Serve(ctx, addr)
+			},
+		}
+		sub.Flags().StringVar(&addr, "addr", "127.0.0.1:8765", "HTTP listen address")
 		cmd.AddCommand(sub)
 	}
 
