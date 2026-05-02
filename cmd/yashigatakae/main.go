@@ -44,9 +44,7 @@ func main() {
 	root.AddCommand(newSyncCmd())
 	root.AddCommand(newUpgradeCmd())
 	root.AddCommand(newMempalaceCmd())
-
-	// v0.2+ — stubs that print a friendly "not yet" message
-	root.AddCommand(notYet("bifrost", "v0.2", bifrost.Help))
+	root.AddCommand(newBifrostCmd())
 	root.AddCommand(notYet("graphify", "v0.4", graphify.Help))
 	root.AddCommand(notYet("hermes", "v0.5", hermes.Help))
 	root.AddCommand(notYet("handoff", "v0.3", kintsugi.HelpHandoff))
@@ -342,6 +340,45 @@ func newMempalaceCmd() *cobra.Command {
 			},
 		}
 		sub.Flags().StringVar(&addr, "addr", "127.0.0.1:8765", "HTTP listen address")
+		cmd.AddCommand(sub)
+	}
+
+	return cmd
+}
+
+func newBifrostCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "bifrost",
+		Short: "MCP gateway: one endpoint that fans out to N downstream MCP servers",
+		RunE: func(c *cobra.Command, args []string) error {
+			fmt.Println(bifrost.Help())
+			return nil
+		},
+	}
+
+	{
+		var addr, mempalaceURL, apiKey string
+		sub := &cobra.Command{
+			Use:   "serve",
+			Short: "Run the bifrost gateway HTTP server",
+			RunE: func(c *cobra.Command, args []string) error {
+				ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+				defer stop()
+				if apiKey == "" {
+					apiKey = os.Getenv("BIFROST_API_KEY")
+				}
+				return bifrost.Serve(ctx, bifrost.Config{
+					Listen: addr,
+					APIKey: apiKey,
+					Downstreams: []bifrost.Downstream{
+						{Name: "mempalace", URL: mempalaceURL},
+					},
+				})
+			},
+		}
+		sub.Flags().StringVar(&addr, "addr", "127.0.0.1:8443", "HTTP listen address")
+		sub.Flags().StringVar(&mempalaceURL, "mempalace", "http://127.0.0.1:8765/mcp", "mempalace MCP endpoint to proxy to")
+		sub.Flags().StringVar(&apiKey, "api-key", "", "Require Bearer token on incoming requests (also reads BIFROST_API_KEY env)")
 		cmd.AddCommand(sub)
 	}
 
