@@ -126,20 +126,28 @@ func main() {
 }
 
 func newInitCmd() *cobra.Command {
-	var vps, github, skipGstack bool
+	var vps, github, skipGstack, nonInteractive bool
 	var stateRepo string
 
 	cmd := &cobra.Command{
 		Use:   "init",
-		Short: "Bootstrap this machine: gstack, caveman hooks, state render, MCP placeholder",
+		Short: "Bootstrap this machine: gstack, caveman hooks, state render, MCP placeholder. Interactive by default on a TTY; pass --yes to skip the wizard.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			opts := state.InitOptions{
+			interactive := !nonInteractive && isTTY(os.Stdin)
+			if interactive {
+				return runInteractiveInit(state.InitOptions{
+					VPS:            vps,
+					GitHub:         github,
+					LocalStateRepo: stateRepo,
+					SkipGstack:     skipGstack,
+				})
+			}
+			return state.Run(state.InitOptions{
 				VPS:            vps,
 				GitHub:         github,
 				LocalStateRepo: stateRepo,
 				SkipGstack:     skipGstack,
-			}
-			return state.Run(opts)
+			})
 		},
 	}
 
@@ -147,8 +155,95 @@ func newInitCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&github, "github", false, "Create GitHub repos (state, memory-mirror)")
 	cmd.Flags().StringVar(&stateRepo, "state-repo", "", "Path to local yashigatakae-state checkout (overrides github fetch)")
 	cmd.Flags().BoolVar(&skipGstack, "skip-gstack", false, "Skip the gstack ./setup step (useful for dogfood / CI; gstack still expected to be installed separately)")
+	cmd.Flags().BoolVarP(&nonInteractive, "yes", "y", false, "Skip the wizard and accept all defaults (CI / scripts)")
 
 	return cmd
+}
+
+// runInteractiveInit drops into the Bubble Tea wizard, then applies whatever
+// the user picked: state.Run for templates/hooks/skills, plus the optional
+// post-install hooks (backfill, wiki, hermes start, doctor).
+func runInteractiveInit(baseOpts state.InitOptions) error {
+	choices, ok, err := tui.RunInitWizard()
+	if err != nil {
+		return err
+	}
+	if !ok {
+		fmt.Println("(wizard cancelled — nothing changed)")
+		return nil
+	}
+
+	baseOpts.SkipGstack = !choices.InstallGstack
+	if err := state.Run(baseOpts); err != nil {
+		return err
+	}
+
+	if choices.ActivateCaveman {
+		if err := caveman.SetLevel(choices.CavemanLevel); err != nil {
+			fmt.Printf("  ! caveman level: %v\n", err)
+		}
+	}
+
+	if choices.BackfillSessions {
+		fmt.Println()
+		fmt.Println("[post] backfill — pulling past Claude sessions into mempalace + relay")
+		var since time.Duration
+		if choices.BackfillScope == "recent30d" {
+			since = 30 * 24 * time.Hour
+		}
+		opts := kintsugi.BackfillOptions{
+			Since:        since,
+			SkipDiskCheck: true, // local-only mempalace insert; relay push gated separately
+		}
+		if rep, err := kintsugi.Backfill(context.Background(), opts); err != nil {
+			fmt.Printf("  ! backfill: %v (you can re-run later via `yashigatakae backfill`)\n", err)
+		} else {
+			fmt.Printf("  · backfilled %d transcripts (%d skipped via ledger)\n", rep.Uploaded, rep.Skipped)
+		}
+	}
+
+	if choices.BuildWiki {
+		fmt.Println()
+		fmt.Println("[post] graphify — generating LLM Wiki for the current project")
+		cwd, _ := os.Getwd()
+		if rep, err := graphify.Run(graphify.Options{Repo: cwd, Pro: true}); err != nil {
+			fmt.Printf("  ! graphify: %v\n", err)
+		} else {
+			fmt.Printf("  · wiki at %s (%d files)\n", rep.WikiDir, rep.Files)
+		}
+	}
+
+	if choices.StartHermes {
+		fmt.Println()
+		fmt.Println("[post] hermes — enabling always-on background worker")
+		if err := state.Enable(); err != nil {
+			fmt.Printf("  ! enable: %v (run `sudo yashigatakae enable` manually)\n", err)
+		}
+	}
+
+	if choices.RunDoctor {
+		fmt.Println()
+		fmt.Println("[post] doctor — final health checks")
+		_ = doctor.Run()
+	}
+
+	fmt.Println()
+	fmt.Println("══════════════════════════════════════════════════════════════")
+	fmt.Println("  ✓ yashigatakae ready")
+	fmt.Println("  open Claude Code — caveman + mempalace + bifrost + wiki are live")
+	fmt.Println("══════════════════════════════════════════════════════════════")
+	return nil
+}
+
+func isTTY(f *os.File) bool {
+	if f == nil {
+		return false
+	}
+	info, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return (info.Mode() & os.ModeCharDevice) != 0
 }
 
 func newDoctorCmd() *cobra.Command {
