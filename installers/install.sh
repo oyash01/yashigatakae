@@ -77,10 +77,22 @@ esac
 # ── version sanity ─────────────────────────────────────────────────
 "$PREFIX/yashigatakae" --version || err "binary failed to run"
 
-# ── auto-init ──────────────────────────────────────────────────────
-if [ "${YASHI_NO_INIT:-0}" != "1" ]; then
-  info "running yashigatakae init"
-  "$PREFIX/yashigatakae" init
-fi
-
-ok "done — try: yashigatakae doctor"
+# ── done ───────────────────────────────────────────────────────────
+# We deliberately do NOT auto-run `yashigatakae init` here. `init` is now
+# an interactive Bubble Tea wizard, and `curl | sh` runs without a TTY,
+# so the wizard couldn't render anyway. Tell the user to launch it
+# themselves and they get the proper interactive setup.
+echo
+ok "yashigatakae installed"
+echo
+echo "Next steps:"
+echo "  1. Run the interactive setup:   yashigatakae init"
+echo "     (or skip the wizard with:    yashigatakae init -y )"
+echo "  2. Verify everything is wired:  yashigatakae doctor"
+echo "  3. Build the wiki for a repo:   cd <repo> && yashigatakae graphify . --pro"
+echo "  4. Open Claude Code — caveman + mempalace + bifrost are auto-loaded."
+echo
+case ":$PATH:" in
+  *":$PREFIX:"*) : ;;
+  *) echo "(${PREFIX} is not on your PATH; add it to your shell rc and re-source)" ;;
+esac
