@@ -729,6 +729,38 @@ func newMempalaceCmd() *cobra.Command {
 		cmd.AddCommand(sub)
 	}
 
+	// hydrate — SessionStart helper
+	{
+		var top, recentN int
+		var halfLife float64
+		var includeRecent bool
+		var cwd string
+		sub := &cobra.Command{
+			Use:   "hydrate",
+			Short: "Print top-N project-scoped memories for the SessionStart hook to inject",
+			RunE: func(c *cobra.Command, args []string) error {
+				res, err := mempalace.Hydrate(context.Background(), mempalace.HydrateOptions{
+					CWD:           cwd,
+					TopK:          top,
+					HalfLife:      halfLife,
+					IncludeRecent: includeRecent,
+					RecentN:       recentN,
+				})
+				if err != nil {
+					return err
+				}
+				fmt.Print(res.FormatForSessionStart())
+				return nil
+			},
+		}
+		sub.Flags().IntVar(&top, "top", 5, "How many project-scoped hits to surface")
+		sub.Flags().IntVar(&recentN, "recent", 3, "How many recent (any-project) entries to also surface")
+		sub.Flags().Float64Var(&halfLife, "half-life", 30, "Time-decay half-life in days")
+		sub.Flags().BoolVar(&includeRecent, "include-recent", true, "Append the recent-activity tail")
+		sub.Flags().StringVar(&cwd, "cwd", "", "Override the project root (defaults to $PWD)")
+		cmd.AddCommand(sub)
+	}
+
 	// consolidate
 	{
 		var project, window string
