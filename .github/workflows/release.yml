@@ -131,37 +131,37 @@ jobs:
             echo "See [CHANGELOG.md](https://github.com/oyash01/yashigatakae/blob/main/CHANGELOG.md) for the full version history." >> release-notes.md
           fi
           # Append install + checksum boilerplate to every release.
-          cat >> release-notes.md <<'EOF'
-
----
-
-## Install
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/oyash01/yashigatakae/main/installers/install.sh | sh
-yashigatakae init
-```
-
-Windows (PowerShell):
-```powershell
-irm https://raw.githubusercontent.com/oyash01/yashigatakae/main/installers/install.ps1 | iex
-```
-
-## Verify
-
-```bash
-shasum -a 256 -c checksums.txt
-```
-
-## Docs
-
-- [Getting Started](https://github.com/oyash01/yashigatakae/blob/main/docs/getting-started.md)
-- [VPS Setup](https://github.com/oyash01/yashigatakae/blob/main/docs/vps-setup.md)
-- [Architecture](https://github.com/oyash01/yashigatakae/blob/main/docs/architecture.md)
-- [LLM Install Manual](https://github.com/oyash01/yashigatakae/blob/main/docs/LLM-INSTALL.md)
-
-Built by [TeamOYash Technologies](https://github.com/oyash01) — `@OYash01`.
-EOF
+          # NOTE: do NOT use a leading "---" column-0 line here — YAML would
+          # parse it as a document separator, breaking the workflow file.
+          {
+            echo ""
+            echo "## Install"
+            echo ""
+            echo '```bash'
+            echo "curl -fsSL https://raw.githubusercontent.com/oyash01/yashigatakae/main/installers/install.sh | sh"
+            echo "yashigatakae init"
+            echo '```'
+            echo ""
+            echo "Windows (PowerShell):"
+            echo '```powershell'
+            echo "irm https://raw.githubusercontent.com/oyash01/yashigatakae/main/installers/install.ps1 | iex"
+            echo '```'
+            echo ""
+            echo "## Verify"
+            echo ""
+            echo '```bash'
+            echo "shasum -a 256 -c checksums.txt"
+            echo '```'
+            echo ""
+            echo "## Docs"
+            echo ""
+            echo "- [Getting Started](https://github.com/oyash01/yashigatakae/blob/main/docs/getting-started.md)"
+            echo "- [VPS Setup](https://github.com/oyash01/yashigatakae/blob/main/docs/vps-setup.md)"
+            echo "- [Architecture](https://github.com/oyash01/yashigatakae/blob/main/docs/architecture.md)"
+            echo "- [LLM Install Manual](https://github.com/oyash01/yashigatakae/blob/main/docs/LLM-INSTALL.md)"
+            echo ""
+            echo "Built by [TeamOYash Technologies](https://github.com/oyash01) — \`@OYash01\`."
+          } >> release-notes.md
           echo "----- release notes -----"
           cat release-notes.md
 

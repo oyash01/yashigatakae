@@ -2,6 +2,24 @@
 
 All notable changes are documented here. Tags are SemVer (v0.X.Y).
 
+## v0.16.2 — 2026-05-03
+
+**Workflow YAML fix.**
+
+- Removed `---` doc-separator from the release-notes heredoc (YAML parser
+  was treating it as a new-document marker, failing every release run).
+- Replaced heredoc with a plain `{ echo … } >>` block. CI now extracts
+  the matching CHANGELOG.md section and appends install/verify/docs links.
+
+## v0.16.1 — 2026-05-03
+
+**CHANGELOG-driven release notes + go 1.25.**
+
+- New `CHANGELOG.md` with the full version history.
+- `.github/workflows/release.yml` now extracts the per-tag section from
+  CHANGELOG.md and uses it as the release body.
+- CI go-version bumped 1.21 → 1.25 to match go.mod.
+
 ## v0.16.0 — 2026-05-03
 
 **Interactive setup wizard + docs site.**
