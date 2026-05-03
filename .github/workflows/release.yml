@@ -46,7 +46,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.21'
+          go-version: '1.25'
 
       - name: Resolve version
         id: ver
@@ -92,6 +92,8 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
@@ -113,11 +115,61 @@ jobs:
             echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Extract release notes from CHANGELOG.md
+        id: notes
+        run: |
+          tag="${{ steps.ver.outputs.tag }}"
+          # Pull the section between "## $tag" and the next "## " header.
+          awk -v tag="$tag" '
+            $0 ~ "^## "tag { found=1; next }
+            found && /^## v/ { exit }
+            found { print }
+          ' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "yashigatakae $tag" > release-notes.md
+            echo "" >> release-notes.md
+            echo "See [CHANGELOG.md](https://github.com/oyash01/yashigatakae/blob/main/CHANGELOG.md) for the full version history." >> release-notes.md
+          fi
+          # Append install + checksum boilerplate to every release.
+          cat >> release-notes.md <<'EOF'
+
+---
+
+## Install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/oyash01/yashigatakae/main/installers/install.sh | sh
+yashigatakae init
+```
+
+Windows (PowerShell):
+```powershell
+irm https://raw.githubusercontent.com/oyash01/yashigatakae/main/installers/install.ps1 | iex
+```
+
+## Verify
+
+```bash
+shasum -a 256 -c checksums.txt
+```
+
+## Docs
+
+- [Getting Started](https://github.com/oyash01/yashigatakae/blob/main/docs/getting-started.md)
+- [VPS Setup](https://github.com/oyash01/yashigatakae/blob/main/docs/vps-setup.md)
+- [Architecture](https://github.com/oyash01/yashigatakae/blob/main/docs/architecture.md)
+- [LLM Install Manual](https://github.com/oyash01/yashigatakae/blob/main/docs/LLM-INSTALL.md)
+
+Built by [TeamOYash Technologies](https://github.com/oyash01) — `@OYash01`.
+EOF
+          echo "----- release notes -----"
+          cat release-notes.md
+
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.ver.outputs.tag }}
           name: yashigatakae ${{ steps.ver.outputs.tag }}
-          generate_release_notes: true
+          body_path: release-notes.md
           files: |
             out/*.tar.gz
             out/*.zip
